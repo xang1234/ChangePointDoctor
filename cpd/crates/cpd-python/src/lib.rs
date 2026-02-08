@@ -3,6 +3,9 @@
 #![forbid(unsafe_code)]
 #![allow(unsafe_op_in_unsafe_fn)]
 
+mod error_map;
+mod numpy_interop;
+
 use pyo3::prelude::*;
 use pyo3::types::PyModule;
 
