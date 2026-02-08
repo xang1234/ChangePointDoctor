@@ -2,9 +2,11 @@
 
 #![forbid(unsafe_code)]
 
+pub mod l2;
 pub mod model;
 
 pub use cpd_core::MissingSupport;
+pub use l2::{CostL2Mean, L2Cache};
 pub use model::{CachedCost, CostModel};
 
 /// Built-in cost model namespace placeholder.

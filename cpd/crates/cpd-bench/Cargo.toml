@@ -33,3 +33,8 @@ criterion = "0.5"
 name = "numerics_prefix"
 harness = false
 path = "benches/numerics_prefix.rs"
+
+[[bench]]
+name = "cost_l2"
+harness = false
+path = "benches/cost_l2.rs"
