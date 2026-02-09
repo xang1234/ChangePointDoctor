@@ -5,9 +5,11 @@
 
 mod error_map;
 mod numpy_interop;
+mod result_objects;
 
 use pyo3::prelude::*;
 use pyo3::types::PyModule;
+use result_objects::{PyDiagnostics, PyOfflineChangePointResult, PyPruningStats, PySegmentStats};
 
 fn parse_sequence(values: &Bound<'_, PyAny>) -> PyResult<Vec<f64>> {
     values.extract::<Vec<f64>>().map_err(|_| {
@@ -66,6 +68,10 @@ fn smoke_detect(values: &Bound<'_, PyAny>) -> PyResult<Vec<usize>> {
 #[pymodule]
 fn _cpd_rs(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add("__version__", env!("CARGO_PKG_VERSION"))?;
+    module.add_class::<PyPruningStats>()?;
+    module.add_class::<PySegmentStats>()?;
+    module.add_class::<PyDiagnostics>()?;
+    module.add_class::<PyOfflineChangePointResult>()?;
     module.add_class::<SmokeDetector>()?;
     module.add_function(wrap_pyfunction!(smoke_detect, module)?)?;
     Ok(())
@@ -113,6 +119,18 @@ mod tests {
             module
                 .getattr("smoke_detect")
                 .expect("smoke_detect should be exported");
+            module
+                .getattr("PruningStats")
+                .expect("PruningStats should be exported");
+            module
+                .getattr("SegmentStats")
+                .expect("SegmentStats should be exported");
+            module
+                .getattr("Diagnostics")
+                .expect("Diagnostics should be exported");
+            module
+                .getattr("OfflineChangePointResult")
+                .expect("OfflineChangePointResult should be exported");
         });
     }
 }

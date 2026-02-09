@@ -14,7 +14,7 @@ crate-type = ["cdylib"]
 default = []
 extension-module = ["pyo3/extension-module"]
 rayon = ["cpd-doctor/rayon"]
-serde = ["cpd-doctor/serde"]
+serde = ["cpd-doctor/serde", "dep:serde_json"]
 tracing = ["cpd-doctor/tracing"]
 simd = ["cpd-doctor/simd"]
 kernel = ["cpd-doctor/kernel"]
@@ -31,3 +31,4 @@ cpd-online = { path = "../cpd-online" }
 cpd-doctor = { path = "../cpd-doctor" }
 pyo3 = { version = "0.22", features = ["abi3-py39", "auto-initialize"] }
 numpy = "0.22"
+serde_json = { version = "1", optional = true }

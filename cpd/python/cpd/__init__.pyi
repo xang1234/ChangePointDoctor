@@ -1,3 +1,19 @@
-from ._cpd_rs import SmokeDetector, __version__, smoke_detect
+from ._cpd_rs import (
+    Diagnostics,
+    OfflineChangePointResult,
+    PruningStats,
+    SegmentStats,
+    SmokeDetector,
+    __version__,
+    smoke_detect,
+)
 
-__all__ = ["__version__", "SmokeDetector", "smoke_detect"]
+__all__ = [
+    "__version__",
+    "PruningStats",
+    "SegmentStats",
+    "Diagnostics",
+    "OfflineChangePointResult",
+    "SmokeDetector",
+    "smoke_detect",
+]
