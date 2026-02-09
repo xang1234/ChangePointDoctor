@@ -1,0 +1,55 @@
+name: wheel-smoke
+
+on:
+  workflow_run:
+    workflows: ["wheel-build"]
+    types:
+      - completed
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  smoke:
+    name: smoke-${{ matrix.os }}-py${{ matrix.python-version }}
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python-version: ["3.9", "3.10", "3.11", "3.12"]
+
+    steps:
+      - name: Checkout triggering commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Download matching wheel artifact
+        uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          name: wheel-${{ matrix.os }}-py${{ matrix.python-version }}
+          path: wheelhouse
+
+      - name: Install wheel
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install wheelhouse/*.whl
+
+      - name: Import smoke test
+        run: python -c "import cpd; print(cpd.__version__); assert cpd.smoke_detect([0.0, 1.0]) == [2]"
+
+      - name: Run Python smoke test module
+        run: |
+          python -m pip install pytest
+          pytest -q cpd/python/tests/test_smoke.py

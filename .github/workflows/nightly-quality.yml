@@ -1,0 +1,109 @@
+name: nightly-quality
+
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz-1h:
+    name: fuzz-1h
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: cpd
+
+      - name: Install cargo-fuzz
+        run: cargo install --locked cargo-fuzz
+
+      - name: Run fuzz target for one hour
+        working-directory: cpd/crates/cpd-offline/fuzz
+        run: cargo fuzz run pelt_no_panic -- -max_total_time=3600
+
+  soak-tests:
+    name: soak-tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: cpd
+
+      - name: Run release-mode workspace tests
+        working-directory: cpd
+        run: cargo test --workspace --release --all-targets --exclude cpd-bench
+
+      - name: Build Python extension in release mode
+        working-directory: cpd/python
+        run: |
+          python -m pip install --upgrade pip maturin pytest numpy
+          maturin develop --release --manifest-path ../crates/cpd-python/Cargo.toml
+
+      - name: Run long Python soak smoke tests
+        working-directory: cpd/python
+        run: |
+          pytest -q \
+            tests/test_pelt.py::test_pelt_large_array_smoke \
+            tests/test_pelt.py::test_pelt_releases_gil_during_predict
+
+  extended-benchmarks:
+    name: extended-benchmarks
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: cpd
+
+      - name: Run full benchmark suite
+        run: |
+          python3 .github/scripts/benchmark_gate.py collect \
+            --workspace cpd \
+            --out cpd/nightly-benchmark.json \
+            --bench numerics_prefix \
+            --bench cost_l2 \
+            --bench offline_pelt \
+            --bench offline_binseg
+
+      - name: Upload nightly benchmark report
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-benchmark-report
+          path: cpd/nightly-benchmark.json
+          if-no-files-found: error

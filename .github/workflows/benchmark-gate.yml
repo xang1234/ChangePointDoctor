@@ -1,0 +1,95 @@
+name: benchmark-gate
+
+on:
+  pull_request:
+    branches:
+      - "**"
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  benchmark-compare:
+    name: benchmark-compare
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: cpd
+
+      - name: Collect benchmark metrics
+        run: |
+          python3 .github/scripts/benchmark_gate.py collect \
+            --workspace cpd \
+            --out cpd/benchmark-current.json \
+            --bench numerics_prefix \
+            --bench cost_l2 \
+            --bench offline_pelt \
+            --bench offline_binseg
+
+      - name: Upload current benchmark report
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-current
+          path: cpd/benchmark-current.json
+          if-no-files-found: error
+
+      - name: Prepare rolling baseline payload
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: cp cpd/benchmark-current.json cpd/benchmark-baseline.json
+
+      - name: Upload rolling baseline from main
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-baseline
+          path: cpd/benchmark-baseline.json
+          if-no-files-found: error
+          overwrite: true
+
+      - name: Download latest main baseline artifact
+        if: github.event_name == 'pull_request'
+        continue-on-error: true
+        uses: dawidd6/action-download-artifact@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          workflow: benchmark-gate.yml
+          workflow_conclusion: success
+          branch: main
+          name: benchmark-baseline
+          path: cpd/benchmark-baseline
+          search_artifacts: true
+          if_no_artifact_found: warn
+
+      - name: Compare against rolling baseline
+        if: github.event_name == 'pull_request'
+        run: |
+          BASELINE_PATH="cpd/benchmark-baseline/benchmark-baseline.json"
+          if [[ ! -f "${BASELINE_PATH}" ]]; then
+            echo "::warning::No benchmark baseline artifact found on main; bootstrap by running benchmark-gate once on main."
+            exit 0
+          fi
+
+          python3 .github/scripts/benchmark_gate.py compare \
+            --baseline "${BASELINE_PATH}" \
+            --current cpd/benchmark-current.json \
+            --max-runtime-regression-pct 10 \
+            --max-rss-regression-pct 15

@@ -1,0 +1,191 @@
+name: release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+  build-wheels:
+    name: release-wheel-${{ matrix.os }}-py${{ matrix.python-version }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python-version: ["3.9", "3.10", "3.11", "3.12"]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: cpd
+
+      - name: Install maturin
+        run: python -m pip install --upgrade pip maturin
+
+      - name: Build wheel
+        working-directory: cpd/python
+        run: maturin build --release --manifest-path ../crates/cpd-python/Cargo.toml --interpreter python
+
+      - name: Upload release wheel artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-wheel-${{ matrix.os }}-py${{ matrix.python-version }}
+          path: cpd/target/wheels/*.whl
+          if-no-files-found: error
+
+  build-sdist:
+    name: release-sdist
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install maturin
+        run: python -m pip install --upgrade pip maturin
+
+      - name: Build source distribution
+        working-directory: cpd/python
+        run: maturin sdist --manifest-path ../crates/cpd-python/Cargo.toml --out dist
+
+      - name: Upload sdist artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-sdist
+          path: cpd/python/dist/*.tar.gz
+          if-no-files-found: error
+
+  sign-sbom-attest:
+    name: sign-sbom-attest
+    needs: [build-wheels, build-sdist]
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download wheel artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-wheel-*
+          merge-multiple: true
+          path: release-artifacts/dist
+
+      - name: Download sdist artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: release-sdist
+          path: release-artifacts/dist
+
+      - name: Install cargo-cyclonedx
+        working-directory: cpd
+        run: cargo install --locked cargo-cyclonedx
+
+      - name: Generate Rust SBOM
+        run: |
+          mkdir -p release-artifacts/sbom
+          if cargo cyclonedx --manifest-path cpd/Cargo.toml --workspace --format json --output-file release-artifacts/sbom/sbom-rust.cdx.json; then
+            echo "Generated Rust SBOM at release-artifacts/sbom/sbom-rust.cdx.json"
+          else
+            echo "Primary cargo cyclonedx invocation failed; retrying with default output."
+            cargo cyclonedx --manifest-path cpd/Cargo.toml --workspace --format json
+            CANDIDATE="$(find cpd -type f \( -name '*.cdx.json' -o -name 'bom.json' \) | head -n 1)"
+            if [[ -z "${CANDIDATE}" ]]; then
+              echo "Unable to locate CycloneDX output" >&2
+              exit 1
+            fi
+            cp "${CANDIDATE}" release-artifacts/sbom/sbom-rust.cdx.json
+          fi
+
+      - name: Install syft
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
+          syft version
+
+      - name: Generate wheel SBOM
+        run: |
+          syft packages release-artifacts/dist -o cyclonedx-json=release-artifacts/sbom/sbom-wheels.cdx.json
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3.7.0
+
+      - name: Sign release artifacts with Sigstore keyless
+        run: |
+          mkdir -p release-artifacts/signatures
+          shopt -s nullglob
+
+          files=(release-artifacts/dist/* release-artifacts/sbom/*.json)
+          if [[ ${#files[@]} -eq 0 ]]; then
+            echo "No artifacts found to sign" >&2
+            exit 1
+          fi
+
+          for artifact in "${files[@]}"; do
+            base="$(basename "${artifact}")"
+            cosign sign-blob --yes \
+              --output-signature "release-artifacts/signatures/${base}.sig" \
+              --output-certificate "release-artifacts/signatures/${base}.pem" \
+              "${artifact}"
+          done
+
+      - name: Upload signed release bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-artifacts-signed
+          path: release-artifacts
+          if-no-files-found: error
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            release-artifacts/dist/*
+            release-artifacts/sbom/*.json
+
+  publish-pypi:
+    name: publish-pypi
+    needs: sign-sbom-attest
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Download signed release bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: release-artifacts-signed
+          path: release-artifacts
+
+      - name: Publish distributions to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: release-artifacts/dist
