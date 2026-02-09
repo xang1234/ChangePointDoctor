@@ -448,6 +448,41 @@ fn detect_with_spec(
     }
 }
 
+#[cfg(feature = "fuzzing")]
+pub fn fuzz_detect_offline_numpy_case(
+    py: Python<'_>,
+    x: &Bound<'_, PyAny>,
+    time: Option<&Bound<'_, PyAny>>,
+    detector: &str,
+    cost: &str,
+    pen: Option<f64>,
+) -> PyResult<()> {
+    let detector = PyDetectorKind::parse(detector)?;
+    let cost = PyCostModel::parse(cost)?;
+    let parsed = parse_numpy_series(py, x, time, MissingPolicy::Error, DTypePolicy::KeepInput)?;
+    let owned = parsed.into_owned().map_err(cpd_error_to_pyerr)?;
+
+    let stopping = match pen {
+        Some(beta) if beta.is_finite() && beta > 0.0 => Stopping::Penalized(Penalty::Manual(beta)),
+        _ => Stopping::Penalized(Penalty::BIC),
+    };
+
+    let _ = py
+        .allow_threads(|| {
+            detect_with_spec(
+                detector,
+                cost,
+                &owned,
+                &Constraints::default(),
+                stopping,
+                ReproMode::Balanced,
+            )
+        })
+        .map_err(cpd_error_to_pyerr)?;
+
+    Ok(())
+}
+
 /// High-level ruptures-like Python interface for offline PELT detection.
 #[pyclass(module = "cpd._cpd_rs", name = "Pelt")]
 #[derive(Clone, Debug)]

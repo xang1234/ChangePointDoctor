@@ -13,12 +13,26 @@ jobs:
     name: fuzz-1h
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - timeseries_view_no_panic
+          - cost_segment_cost_no_panic
+          - offline_detectors_no_panic
+          - numpy_interop_no_panic
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Setup Rust nightly
         uses: dtolnay/rust-toolchain@nightly
+
+      - name: Setup Python
+        id: setup-python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
 
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
@@ -28,9 +42,22 @@ jobs:
       - name: Install cargo-fuzz
         run: cargo install --locked cargo-fuzz
 
-      - name: Run fuzz target for one hour
-        working-directory: cpd/crates/cpd-offline/fuzz
-        run: cargo fuzz run pelt_no_panic -- -max_total_time=3600
+      - name: Install NumPy for Python interop fuzzing
+        run: python -m pip install --upgrade pip numpy
+
+      - name: Run fuzz target for 900 seconds
+        working-directory: cpd/fuzz
+        env:
+          PYO3_PYTHON: ${{ steps.setup-python.outputs.python-path }}
+        run: cargo fuzz run ${{ matrix.target }} -- -max_total_time=900
+
+      - name: Upload fuzz artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-artifacts-${{ matrix.target }}
+          path: cpd/fuzz/artifacts
+          if-no-files-found: ignore
 
   soak-tests:
     name: soak-tests

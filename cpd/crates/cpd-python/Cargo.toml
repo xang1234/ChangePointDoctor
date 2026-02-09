@@ -8,11 +8,12 @@ rust-version.workspace = true
 [lib]
 name = "_cpd_rs"
 path = "src/lib.rs"
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "rlib"]
 
 [features]
 default = []
 extension-module = ["pyo3/extension-module"]
+fuzzing = []
 rayon = ["cpd-doctor/rayon"]
 serde = ["cpd-doctor/serde", "dep:serde_json"]
 tracing = ["cpd-doctor/tracing"]
