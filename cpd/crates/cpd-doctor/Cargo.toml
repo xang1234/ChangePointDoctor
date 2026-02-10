@@ -18,10 +18,16 @@ kernel = ["cpd-offline/kernel", "cpd-online/kernel"]
 kernel-approx = ["cpd-offline/kernel-approx", "cpd-online/kernel-approx"]
 blas = ["cpd-offline/blas", "cpd-online/blas"]
 gp = ["cpd-offline/gp", "cpd-online/gp"]
-preprocess = ["cpd-offline/preprocess", "cpd-online/preprocess"]
+preprocess = [
+  "cpd-offline/preprocess",
+  "cpd-online/preprocess",
+  "dep:cpd-preprocess",
+  "cpd-preprocess/preprocess",
+]
 repro-strict = ["cpd-offline/repro-strict", "cpd-online/repro-strict"]
 
 [dependencies]
 cpd-core = { path = "../cpd-core" }
 cpd-offline = { path = "../cpd-offline" }
 cpd-online = { path = "../cpd-online" }
+cpd-preprocess = { path = "../cpd-preprocess", optional = true }

@@ -162,6 +162,7 @@ dependencies = [
  "cpd-core",
  "cpd-offline",
  "cpd-online",
+ "cpd-preprocess",
 ]
 
 [[package]]
