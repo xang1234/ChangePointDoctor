@@ -80,7 +80,7 @@ impl<'a> ExecutionContext<'a> {
     /// When `every` is zero, it is treated as one (always poll).
     pub fn check_cancelled_every(&self, iteration: usize, every: usize) -> Result<(), CpdError> {
         let every = every.max(1);
-        if iteration % every != 0 {
+        if !iteration.is_multiple_of(every) {
             return Ok(());
         }
         self.check_cancelled()

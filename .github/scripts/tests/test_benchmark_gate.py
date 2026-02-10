@@ -3,6 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 import sys
+from unittest import mock
 
 SCRIPT_DIR = Path(__file__).resolve().parents[1]
 if str(SCRIPT_DIR) not in sys.path:
@@ -68,6 +69,55 @@ class BenchmarkGateTests(unittest.TestCase):
     def test_parse_max_rss_kib_gnu(self):
         out = "Maximum resident set size (kbytes): 4242"
         self.assertEqual(benchmark_gate._parse_max_rss_kib(out, "gnu"), 4242)
+
+    def test_is_gnu_time_is_case_insensitive(self):
+        fake = mock.Mock(returncode=0, stdout="time (GNU Time) 1.9", stderr="")
+        with mock.patch("benchmark_gate.subprocess.run", return_value=fake):
+            self.assertTrue(benchmark_gate._is_gnu_time("/usr/bin/time"))
+
+    def test_select_time_command_prefers_usr_bin_gnu(self):
+        with (
+            mock.patch("benchmark_gate._is_gnu_time", return_value=True),
+            mock.patch("benchmark_gate._supports_time_mode", return_value=True),
+        ):
+            cmd, mode = benchmark_gate._select_time_command()
+        self.assertEqual(cmd, ["/usr/bin/time", "-v"])
+        self.assertEqual(mode, "gnu")
+
+    def test_select_time_command_falls_back_to_gtime(self):
+        with (
+            mock.patch("benchmark_gate._is_gnu_time", side_effect=[False, True]),
+            mock.patch(
+                "benchmark_gate._supports_time_mode",
+                side_effect=lambda binary, flag: binary == "/opt/homebrew/bin/gtime" and flag == "-v",
+            ),
+            mock.patch("benchmark_gate.shutil.which", return_value="/opt/homebrew/bin/gtime"),
+        ):
+            cmd, mode = benchmark_gate._select_time_command()
+        self.assertEqual(cmd, ["/opt/homebrew/bin/gtime", "-v"])
+        self.assertEqual(mode, "gnu")
+
+    def test_select_time_command_falls_back_to_bsd(self):
+        with (
+            mock.patch("benchmark_gate._is_gnu_time", return_value=False),
+            mock.patch(
+                "benchmark_gate._supports_time_mode",
+                side_effect=lambda binary, flag: binary == "/usr/bin/time" and flag == "-l",
+            ),
+            mock.patch("benchmark_gate.shutil.which", return_value=None),
+        ):
+            cmd, mode = benchmark_gate._select_time_command()
+        self.assertEqual(cmd, ["/usr/bin/time", "-l"])
+        self.assertEqual(mode, "bsd")
+
+    def test_select_time_command_errors_when_no_supported_binary(self):
+        with (
+            mock.patch("benchmark_gate._is_gnu_time", return_value=False),
+            mock.patch("benchmark_gate._supports_time_mode", return_value=False),
+            mock.patch("benchmark_gate.shutil.which", return_value=None),
+        ):
+            with self.assertRaisesRegex(ValueError, "unable to find supported time command"):
+                benchmark_gate._select_time_command()
 
     def test_compare_relative_pass_within_thresholds(self):
         baseline = _payload([_entry("offline_pelt", 10.0, 1000)])

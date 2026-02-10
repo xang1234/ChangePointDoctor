@@ -225,12 +225,11 @@ impl<'a> TimeSeriesView<'a> {
             row_stride,
             col_stride,
         } = layout
+            && (row_stride == 0 || col_stride == 0)
         {
-            if row_stride == 0 || col_stride == 0 {
-                return Err(CpdError::invalid_input(format!(
-                    "Strided layout requires non-zero strides: row_stride={row_stride}, col_stride={col_stride}"
-                )));
-            }
+            return Err(CpdError::invalid_input(format!(
+                "Strided layout requires non-zero strides: row_stride={row_stride}, col_stride={col_stride}"
+            )));
         }
 
         Ok(Self {

@@ -1074,8 +1074,7 @@ mod preprocess_tests {
         let values: Vec<f64> = (0..n)
             .map(|t| 0.2 * t as f64 + seasonal[t % period])
             .collect();
-        let baseline_corr =
-            lag_autocorrelation(&remove_linear_trend(&values), period).abs();
+        let baseline_corr = lag_autocorrelation(&remove_linear_trend(&values), period).abs();
         let view = make_view(&values, n, 1, None, MissingPolicy::Error);
         let config = PreprocessConfig {
             deseasonalize: Some(DeseasonalizeConfig {
@@ -1092,8 +1091,7 @@ mod preprocess_tests {
             assert!(value.is_finite(), "value should remain finite: {value}");
         }
 
-        let residual_corr =
-            lag_autocorrelation(&remove_linear_trend(out.values()), period).abs();
+        let residual_corr = lag_autocorrelation(&remove_linear_trend(out.values()), period).abs();
         assert!(
             residual_corr < baseline_corr,
             "expected seasonal lag autocorrelation reduction: before={baseline_corr}, after={residual_corr}"
@@ -1104,7 +1102,13 @@ mod preprocess_tests {
     fn deseasonalize_stl_like_preserves_missing_mask_and_nan_positions() {
         let values = vec![1.0, 2.0, f64::NAN, 4.0, 1.0, 2.0, 1.0, 2.0];
         let missing_mask = vec![0_u8, 1, 0, 0, 0, 0, 0, 0];
-        let view = make_view(&values, values.len(), 1, Some(&missing_mask), MissingPolicy::Ignore);
+        let view = make_view(
+            &values,
+            values.len(),
+            1,
+            Some(&missing_mask),
+            MissingPolicy::Ignore,
+        );
         let config = PreprocessConfig {
             deseasonalize: Some(DeseasonalizeConfig {
                 method: DeseasonalizeMethod::StlLike { period: 2 },
@@ -1122,7 +1126,10 @@ mod preprocess_tests {
             if idx == 1 || idx == 2 {
                 continue;
             }
-            assert!(value.is_finite(), "expected finite value at idx={idx}, got {value}");
+            assert!(
+                value.is_finite(),
+                "expected finite value at idx={idx}, got {value}"
+            );
         }
         let roundtrip = out.as_view().expect("roundtrip view should succeed");
         assert_eq!(roundtrip.n_missing(), 2);

@@ -2,6 +2,8 @@
 
 #![forbid(unsafe_code)]
 #![allow(unsafe_op_in_unsafe_fn)]
+// PyO3-generated wrappers can trip false-positive clippy::useless_conversion diagnostics.
+#![allow(clippy::useless_conversion)]
 
 mod error_map;
 mod numpy_interop;
@@ -688,6 +690,7 @@ impl PyBinseg {
 }
 
 /// Low-level power-user API for fully-specified offline detection.
+#[allow(clippy::too_many_arguments)]
 #[pyfunction]
 #[pyo3(signature = (x, *, detector = "pelt", cost = "l2", constraints = None, stopping = None, repro_mode = "balanced", return_diagnostics = true))]
 fn detect_offline(

@@ -147,7 +147,7 @@ fn check_runtime_controls(
     started_at: Instant,
     runtime: &mut RuntimeStats,
 ) -> Result<(), CpdError> {
-    if iteration % cancel_check_every == 0 {
+    if iteration.is_multiple_of(cancel_check_every) {
         ctx.check_cancelled_every(iteration, 1)?;
         match ctx.check_time_budget(started_at)? {
             BudgetStatus::WithinBudget => {}
@@ -188,6 +188,7 @@ fn segment_can_split(segment: Segment, validated: &ValidatedConstraints) -> bool
     segment.end - segment.start >= min_len.saturating_mul(2)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn best_split_for_segment<C: CostModel>(
     model: &C,
     cache: &C::Cache,
@@ -252,6 +253,7 @@ fn best_split_for_segment<C: CostModel>(
     }))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn add_segment_to_frontier<C: CostModel>(
     frontier: &mut Vec<SegmentCandidate>,
     model: &C,
@@ -551,10 +553,7 @@ impl<C: CostModel> OfflineDetector for BinSeg<C> {
             );
         }
 
-        let runtime_ms = match u64::try_from(started_at.elapsed().as_millis()) {
-            Ok(ms) => ms,
-            Err(_) => u64::MAX,
-        };
+        let runtime_ms = u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
 
         ctx.record_scalar("offline.binseg.cost_evals", runtime.cost_evals as f64);
         ctx.record_scalar(

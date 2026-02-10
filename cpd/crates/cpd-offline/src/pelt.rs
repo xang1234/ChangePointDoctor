@@ -192,6 +192,7 @@ fn reconstruct_breakpoints(n: usize, last_cp: &[usize]) -> Result<(Vec<usize>, u
     Ok((reverse, change_count))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_pelt_penalized<C: CostModel>(
     model: &C,
     cache: &C::Cache,
@@ -228,7 +229,7 @@ fn run_pelt_penalized<C: CostModel>(
     let mut run_pruned = 0usize;
 
     for (target_idx, &t) in targets.iter().enumerate() {
-        if target_idx % cancel_check_every == 0 {
+        if target_idx.is_multiple_of(cancel_check_every) {
             ctx.check_cancelled_every(target_idx, 1)?;
             match ctx.check_time_budget(started_at)? {
                 BudgetStatus::WithinBudget => {}
@@ -349,6 +350,7 @@ fn run_pelt_penalized<C: CostModel>(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_known_k_search<C: CostModel>(
     model: &C,
     cache: &C::Cache,
@@ -567,10 +569,7 @@ impl<C: CostModel> OfflineDetector for Pelt<C> {
             );
         }
 
-        let runtime_ms = match u64::try_from(started_at.elapsed().as_millis()) {
-            Ok(ms) => ms,
-            Err(_) => u64::MAX,
-        };
+        let runtime_ms = u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
 
         ctx.record_scalar("offline.pelt.cost_evals", runtime.cost_evals as f64);
         ctx.record_scalar(

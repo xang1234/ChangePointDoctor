@@ -94,13 +94,13 @@ fn validate_candidate_splits_sorted_unique_in_range(
                 "constraints.candidate_splits[{idx}] must satisfy 0 < split < n; got split={split}, n={n}"
             )));
         }
-        if let Some(prev_split) = prev {
-            if split <= prev_split {
-                return Err(CpdError::invalid_input(format!(
-                    "constraints.candidate_splits must be strictly increasing and unique: index {} has {}, previous {}",
-                    idx, split, prev_split
-                )));
-            }
+        if let Some(prev_split) = prev
+            && split <= prev_split
+        {
+            return Err(CpdError::invalid_input(format!(
+                "constraints.candidate_splits must be strictly increasing and unique: index {} has {}, previous {}",
+                idx, split, prev_split
+            )));
         }
         prev = Some(split);
     }

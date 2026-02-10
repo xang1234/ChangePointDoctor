@@ -332,7 +332,10 @@ impl CostModel for CostNormalMeanVar {
 
 #[cfg(test)]
 mod tests {
-    use super::{CostNormalMeanVar, NormalCache, VAR_FLOOR};
+    use super::{
+        CostNormalMeanVar, NormalCache, VAR_FLOOR, cache_overflow_err, normalize_variance,
+        read_value, strided_linear_index,
+    };
     use crate::l2::CostL2Mean;
     use crate::model::CostModel;
     use cpd_core::{
@@ -357,6 +360,25 @@ mod tests {
     ) -> TimeSeriesView<'a> {
         TimeSeriesView::new(
             DTypeView::F64(values),
+            n,
+            d,
+            layout,
+            None,
+            TimeIndex::None,
+            missing,
+        )
+        .expect("test view should be valid")
+    }
+
+    fn make_f32_view<'a>(
+        values: &'a [f32],
+        n: usize,
+        d: usize,
+        layout: MemoryLayout,
+        missing: MissingPolicy,
+    ) -> TimeSeriesView<'a> {
+        TimeSeriesView::new(
+            DTypeView::F32(values),
             n,
             d,
             layout,
@@ -405,6 +427,99 @@ mod tests {
             .wrapping_mul(6364136223846793005)
             .wrapping_add(1442695040888963407);
         *state
+    }
+
+    #[test]
+    fn strided_linear_index_reports_overflow_and_negative_paths() {
+        let err_t = strided_linear_index(usize::MAX, 0, 1, 1, 8).expect_err("t overflow expected");
+        assert!(matches!(err_t, CpdError::InvalidInput(_)));
+        assert!(err_t.to_string().contains("t="));
+
+        let err_dim =
+            strided_linear_index(0, usize::MAX, 1, 1, 8).expect_err("dim overflow expected");
+        assert!(matches!(err_dim, CpdError::InvalidInput(_)));
+        assert!(err_dim.to_string().contains("dim="));
+
+        let err_mul = strided_linear_index(isize::MAX as usize, 0, 2, 0, 8)
+            .expect_err("checked_mul overflow expected");
+        assert!(matches!(err_mul, CpdError::InvalidInput(_)));
+        assert!(err_mul.to_string().contains("overflow"));
+
+        let err_neg = strided_linear_index(1, 0, -1, 0, 8).expect_err("negative index expected");
+        assert!(matches!(err_neg, CpdError::InvalidInput(_)));
+        assert!(err_neg.to_string().contains("negative"));
+    }
+
+    #[test]
+    fn read_value_f32_layout_paths_and_errors() {
+        let c_values = [1.5_f32, 10.5, 2.5, 20.5];
+        let c_view = make_f32_view(
+            &c_values,
+            2,
+            2,
+            MemoryLayout::CContiguous,
+            MissingPolicy::Error,
+        );
+        assert_close(
+            read_value(&c_view, 1, 0).expect("C f32 read should succeed"),
+            2.5,
+            1e-12,
+        );
+        let c_oob = read_value(&c_view, 1, 2).expect_err("C f32 oob expected");
+        assert!(c_oob.to_string().contains("out of bounds"));
+        let c_overflow = read_value(&c_view, usize::MAX, 0).expect_err("C f32 overflow expected");
+        assert!(c_overflow.to_string().contains("overflow"));
+
+        let f_values = [1.5_f32, 2.5, 10.5, 20.5];
+        let f_view = make_f32_view(
+            &f_values,
+            2,
+            2,
+            MemoryLayout::FContiguous,
+            MissingPolicy::Error,
+        );
+        assert_close(
+            read_value(&f_view, 1, 0).expect("F f32 read should succeed"),
+            2.5,
+            1e-12,
+        );
+        let f_oob = read_value(&f_view, 1, 2).expect_err("F f32 oob expected");
+        assert!(f_oob.to_string().contains("out of bounds"));
+        let f_overflow = read_value(&f_view, 0, usize::MAX).expect_err("F f32 overflow expected");
+        assert!(f_overflow.to_string().contains("overflow"));
+
+        let s_values = [1.5_f32, 10.5, 2.5, 20.5];
+        let s_view = make_f32_view(
+            &s_values,
+            2,
+            2,
+            MemoryLayout::Strided {
+                row_stride: 2,
+                col_stride: 1,
+            },
+            MissingPolicy::Error,
+        );
+        assert_close(
+            read_value(&s_view, 1, 1).expect("strided f32 read should succeed"),
+            20.5,
+            1e-12,
+        );
+    }
+
+    #[test]
+    fn cache_overflow_error_message_is_stable() {
+        let err = cache_overflow_err(7, 11);
+        assert!(matches!(err, CpdError::ResourceLimit(_)));
+        assert!(err.to_string().contains("n=7, d=11"));
+    }
+
+    #[test]
+    fn normalize_variance_clamps_floor_and_infinity() {
+        assert_eq!(normalize_variance(f64::NAN), VAR_FLOOR);
+        assert_eq!(normalize_variance(-1.0), VAR_FLOOR);
+        assert_eq!(normalize_variance(VAR_FLOOR / 2.0), VAR_FLOOR);
+        assert_eq!(normalize_variance(f64::INFINITY), f64::MAX);
+        assert_eq!(normalize_variance(1.25), 1.25);
     }
 
     #[test]
@@ -520,6 +635,14 @@ mod tests {
             .expect("precompute should succeed");
 
         let mut state = 0x1234_5678_9abc_def0_u64;
+        let start = 8;
+        let mut end = 8;
+        if start == end {
+            end = (start + 1).min(n);
+        }
+        let fast = model.segment_cost(&cache, start, end);
+        let naive = naive_normal_univariate(&values, start, end);
+        assert_close(fast, naive, 1e-9);
         for _ in 0..600 {
             let a = (lcg_next(&mut state) as usize) % n;
             let b = (lcg_next(&mut state) as usize) % n;
@@ -658,6 +781,7 @@ mod tests {
         );
 
         let required = model.worst_case_cache_bytes(&view);
+        assert!(required > 0);
 
         model
             .precompute(
@@ -668,17 +792,15 @@ mod tests {
             )
             .expect("budget equal to required should succeed");
 
-        if required > 0 {
-            let err = model
-                .precompute(
-                    &view,
-                    &CachePolicy::Budgeted {
-                        max_bytes: required - 1,
-                    },
-                )
-                .expect_err("budget below required should fail");
-            assert!(matches!(err, CpdError::ResourceLimit(_)));
-        }
+        let err = model
+            .precompute(
+                &view,
+                &CachePolicy::Budgeted {
+                    max_bytes: required - 1,
+                },
+            )
+            .expect_err("budget below required should fail");
+        assert!(matches!(err, CpdError::ResourceLimit(_)));
 
         let err = model
             .precompute(

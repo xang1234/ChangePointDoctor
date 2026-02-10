@@ -58,7 +58,7 @@ jobs:
           workspaces: cpd
 
       - name: Run cargo test
-        run: cargo test --workspace --all-targets --exclude cpd-bench
+        run: cargo test --workspace --all-targets --exclude cpd-bench --exclude cpd-python
 
   proptest-mvp-a:
     name: proptest-mvp-a
@@ -162,7 +162,7 @@ jobs:
         run: cargo install --locked cargo-audit
 
       - name: Generate cargo-audit report
-        run: cargo audit --json > audit-report.json
+        run: cargo audit --json > audit-report.json || true
 
       - name: Fail on high/critical advisories
         run: python3 ../.github/scripts/audit_gate.py audit-report.json
@@ -191,7 +191,7 @@ jobs:
         run: cargo install --locked cargo-deny
 
       - name: Run cargo-deny checks
-        run: cargo deny check licenses bans sources --manifest-path Cargo.toml
+        run: cargo deny check licenses bans sources
 
   python-mvp-a-api:
     name: python-mvp-a-api
@@ -221,7 +221,8 @@ jobs:
       - name: Build Python extension
         run: |
           python -m pip install --upgrade pip maturin numpy pytest
-          maturin develop --release --manifest-path ../crates/cpd-python/Cargo.toml
+          maturin build --release --manifest-path ../crates/cpd-python/Cargo.toml --features extension-module --interpreter python
+          python -m pip install --force-reinstall ../target/wheels/cpd_rs-*.whl
 
       - name: Run MVP-A Python API tests
         run: |
@@ -229,6 +230,12 @@ jobs:
             tests/test_pelt.py \
             tests/test_integration_mvp_a.py \
             tests/test_smoke.py
+
+      - name: Run cpd-python Rust lib tests
+        working-directory: cpd
+        run: |
+          PYTHON_BIN=$(python -c "import sys; print(sys.executable)")
+          PYO3_PYTHON="${PYTHON_BIN}" cargo test -p cpd-python --lib
 
       - name: Run serde fixture regression tests
         working-directory: cpd

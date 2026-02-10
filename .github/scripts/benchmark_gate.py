@@ -135,18 +135,31 @@ def _is_gnu_time(binary: str) -> bool:
     if process.returncode != 0:
         return False
     haystack = f"{process.stdout}\n{process.stderr}"
-    return "GNU time" in haystack
+    return "gnu time" in haystack.lower()
+
+
+def _supports_time_mode(binary: str, flag: str) -> bool:
+    try:
+        process = subprocess.run(
+            [binary, flag, sys.executable, "-c", "pass"],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+    except FileNotFoundError:
+        return False
+    return process.returncode == 0
 
 
 def _select_time_command() -> tuple[list[str], str]:
-    if _is_gnu_time("/usr/bin/time"):
+    if _is_gnu_time("/usr/bin/time") and _supports_time_mode("/usr/bin/time", "-v"):
         return ["/usr/bin/time", "-v"], "gnu"
 
     gtime = shutil.which("gtime")
-    if gtime is not None and _is_gnu_time(gtime):
+    if gtime is not None and _is_gnu_time(gtime) and _supports_time_mode(gtime, "-v"):
         return [gtime, "-v"], "gnu"
 
-    if Path("/usr/bin/time").exists():
+    if _supports_time_mode("/usr/bin/time", "-l"):
         return ["/usr/bin/time", "-l"], "bsd"
 
     raise ValueError("unable to find supported time command (/usr/bin/time or gtime)")
