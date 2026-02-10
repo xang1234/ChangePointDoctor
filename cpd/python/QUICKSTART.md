@@ -47,7 +47,12 @@ low_level = cpd.detect_offline(
         "max_change_points": 4,
     },
     stopping={"n_bkps": 2},
-    preprocess={"winsorize": {}, "robust_scale": {}},  # optional; requires preprocess feature
+    preprocess={
+        "detrend": {"method": "linear"},
+        "deseasonalize": {"method": "differencing", "period": 2},
+        "winsorize": {},  # defaults to lower_quantile=0.01, upper_quantile=0.99
+        "robust_scale": {},  # defaults to mad_epsilon=1e-9, normal_consistency=1.4826
+    },  # optional; requires preprocess feature
     repro_mode="balanced",
     return_diagnostics=True,
 )
@@ -56,6 +61,9 @@ print("Low-level breakpoints:", low_level.breakpoints)
 print("Algorithm:", low_level.diagnostics.algorithm)
 print("Cost model:", low_level.diagnostics.cost_model)
 ```
+
+`preprocess` is strictly validated: unsupported keys or invalid method/parameter
+combinations raise `ValueError`.
 
 ## 4. Run provided examples
 

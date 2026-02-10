@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from pathlib import Path
 import re
 import sys
@@ -33,6 +34,17 @@ CHECKPOINT_REQUIRED = {
     "payload_crc32",
     "payload",
 }
+PREPROCESS_STAGE_KEYS = {"detrend", "deseasonalize", "winsorize", "robust_scale"}
+PREPROCESS_STAGE_REFS = {
+    "detrend": "#/$defs/detrendConfig",
+    "deseasonalize": "#/$defs/deseasonalizeConfig",
+    "winsorize": "#/$defs/winsorizeConfig",
+    "robust_scale": "#/$defs/robustScaleConfig",
+}
+DEFAULT_WINSOR_LOWER = 0.01
+DEFAULT_WINSOR_UPPER = 0.99
+DEFAULT_MAD_EPSILON = 1.0e-9
+DEFAULT_NORMAL_CONSISTENCY = 1.4826
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CPD_ROOT = REPO_ROOT / "cpd"
@@ -77,6 +89,117 @@ def _require_keys(payload: dict[str, Any], required: set[str], context: str) -> 
 
 def _is_number(value: Any) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _is_finite_number(value: Any) -> bool:
+    return _is_number(value) and math.isfinite(float(value))
+
+
+def _validate_preprocess_fixture(preprocess: dict[str, Any], context: str) -> None:
+    unknown_stage_keys = sorted(set(preprocess) - PREPROCESS_STAGE_KEYS)
+    _require(
+        not unknown_stage_keys,
+        f"{context} has unsupported preprocess keys: {', '.join(unknown_stage_keys)}",
+    )
+    missing_stage_keys = sorted(PREPROCESS_STAGE_KEYS - set(preprocess))
+    _require(
+        not missing_stage_keys,
+        f"{context} missing preprocess stage coverage: {', '.join(missing_stage_keys)}",
+    )
+
+    detrend = _as_dict(preprocess.get("detrend"), f"{context}.detrend")
+    detrend_keys = set(detrend)
+    _require(
+        detrend_keys.issubset({"method", "degree"}),
+        f"{context}.detrend contains unsupported keys",
+    )
+    detrend_method = detrend.get("method")
+    _require(
+        isinstance(detrend_method, str),
+        f"{context}.detrend.method must be a string",
+    )
+    if detrend_method == "linear":
+        _require(
+            "degree" not in detrend,
+            f"{context}.detrend.method=linear must not include degree",
+        )
+    elif detrend_method == "polynomial":
+        degree = detrend.get("degree")
+        _require(
+            isinstance(degree, int) and degree >= 1,
+            f"{context}.detrend.method=polynomial requires degree >= 1",
+        )
+    else:
+        raise ValueError(
+            f"{context}.detrend.method must be one of linear|polynomial, got {detrend_method!r}"
+        )
+
+    deseasonalize = _as_dict(preprocess.get("deseasonalize"), f"{context}.deseasonalize")
+    deseasonalize_keys = set(deseasonalize)
+    _require(
+        deseasonalize_keys.issubset({"method", "period"}),
+        f"{context}.deseasonalize contains unsupported keys",
+    )
+    deseasonalize_method = deseasonalize.get("method")
+    _require(
+        isinstance(deseasonalize_method, str),
+        f"{context}.deseasonalize.method must be a string",
+    )
+    period = deseasonalize.get("period")
+    _require(
+        isinstance(period, int),
+        f"{context}.deseasonalize.period must be an integer",
+    )
+    if deseasonalize_method == "differencing":
+        _require(period >= 1, f"{context}.deseasonalize.period must be >= 1 for differencing")
+    elif deseasonalize_method == "stl_like":
+        _require(period >= 2, f"{context}.deseasonalize.period must be >= 2 for stl_like")
+    else:
+        raise ValueError(
+            f"{context}.deseasonalize.method must be one of differencing|stl_like, got {deseasonalize_method!r}"
+        )
+
+    winsorize = _as_dict(preprocess.get("winsorize"), f"{context}.winsorize")
+    winsorize_keys = set(winsorize)
+    _require(
+        winsorize_keys.issubset({"lower_quantile", "upper_quantile"}),
+        f"{context}.winsorize contains unsupported keys",
+    )
+    lower_quantile_raw = winsorize.get("lower_quantile", DEFAULT_WINSOR_LOWER)
+    upper_quantile_raw = winsorize.get("upper_quantile", DEFAULT_WINSOR_UPPER)
+    _require(
+        _is_finite_number(lower_quantile_raw) and _is_finite_number(upper_quantile_raw),
+        f"{context}.winsorize quantiles must be finite numbers",
+    )
+    lower_quantile = float(lower_quantile_raw)
+    upper_quantile = float(upper_quantile_raw)
+    _require(
+        0.0 <= lower_quantile <= 1.0 and 0.0 <= upper_quantile <= 1.0,
+        f"{context}.winsorize quantiles must satisfy 0.0 <= q <= 1.0",
+    )
+    _require(
+        lower_quantile < upper_quantile,
+        f"{context}.winsorize requires lower_quantile < upper_quantile",
+    )
+
+    robust_scale = _as_dict(preprocess.get("robust_scale"), f"{context}.robust_scale")
+    robust_scale_keys = set(robust_scale)
+    _require(
+        robust_scale_keys.issubset({"mad_epsilon", "normal_consistency"}),
+        f"{context}.robust_scale contains unsupported keys",
+    )
+    mad_epsilon_raw = robust_scale.get("mad_epsilon", DEFAULT_MAD_EPSILON)
+    normal_consistency_raw = robust_scale.get(
+        "normal_consistency", DEFAULT_NORMAL_CONSISTENCY
+    )
+    _require(
+        _is_finite_number(mad_epsilon_raw) and _is_finite_number(normal_consistency_raw),
+        f"{context}.robust_scale parameters must be finite numbers",
+    )
+    _require(
+        float(mad_epsilon_raw) > 0.0 and float(normal_consistency_raw) > 0.0,
+        f"{context}.robust_scale parameters must be > 0",
+    )
 
 
 def validate_result_schema(schema: dict[str, Any]) -> None:
@@ -148,6 +271,208 @@ def validate_config_schema(schema: dict[str, Any]) -> None:
         kind.get("const") == "pipeline_spec",
         "config schema.kind const must be 'pipeline_spec'",
     )
+
+    payload = _as_dict(properties.get("payload"), "config schema.payload")
+    _require(payload.get("type") == "object", "config schema.payload type must be object")
+    payload_properties = _as_dict(
+        payload.get("properties"), "config schema.payload.properties"
+    )
+    preprocess_ref = _as_dict(
+        payload_properties.get("preprocess"), "config schema.payload.preprocess"
+    )
+    _require(
+        preprocess_ref.get("$ref") == "#/$defs/preprocessConfig",
+        "config schema.payload.preprocess must reference #/$defs/preprocessConfig",
+    )
+
+    defs = _as_dict(schema.get("$defs"), "config schema.$defs")
+    preprocess_config = _as_dict(defs.get("preprocessConfig"), "config schema.$defs.preprocessConfig")
+    _require(
+        preprocess_config.get("type") == "object",
+        "config schema.$defs.preprocessConfig type must be object",
+    )
+    _require(
+        preprocess_config.get("additionalProperties") is False,
+        "config schema.$defs.preprocessConfig must set additionalProperties=false",
+    )
+    preprocess_properties = _as_dict(
+        preprocess_config.get("properties"), "config schema.$defs.preprocessConfig.properties"
+    )
+    _require(
+        set(preprocess_properties) == PREPROCESS_STAGE_KEYS,
+        "config schema.$defs.preprocessConfig.properties must include only detrend, deseasonalize, winsorize, robust_scale",
+    )
+
+    for stage in sorted(PREPROCESS_STAGE_KEYS):
+        stage_schema = _as_dict(
+            preprocess_properties.get(stage),
+            f"config schema.$defs.preprocessConfig.properties.{stage}",
+        )
+        any_of = _as_list(stage_schema.get("anyOf"), f"config schema preprocess stage {stage}.anyOf")
+        _require(len(any_of) == 2, f"config schema preprocess stage {stage} must have exactly two anyOf entries")
+        stage_ref = PREPROCESS_STAGE_REFS[stage]
+        has_ref = any(
+            isinstance(entry, dict) and entry.get("$ref") == stage_ref for entry in any_of
+        )
+        has_null = any(
+            isinstance(entry, dict) and entry.get("type") == "null" for entry in any_of
+        )
+        _require(
+            has_ref and has_null,
+            f"config schema preprocess stage {stage} must allow null or {stage_ref}",
+        )
+
+    detrend_schema = _as_dict(defs.get("detrendConfig"), "config schema.$defs.detrendConfig")
+    _require(
+        detrend_schema.get("type") == "object",
+        "config schema.$defs.detrendConfig type must be object",
+    )
+    detrend_variants = _as_list(detrend_schema.get("oneOf"), "config schema.$defs.detrendConfig.oneOf")
+    _require(
+        len(detrend_variants) == 2,
+        "config schema.$defs.detrendConfig.oneOf must contain exactly 2 variants",
+    )
+    detrend_by_method: dict[str, dict[str, Any]] = {}
+    for idx, variant_value in enumerate(detrend_variants):
+        variant = _as_dict(
+            variant_value, f"config schema.$defs.detrendConfig.oneOf[{idx}]"
+        )
+        _require(
+            variant.get("additionalProperties") is False,
+            f"config schema.$defs.detrendConfig.oneOf[{idx}] must set additionalProperties=false",
+        )
+        variant_properties = _as_dict(
+            variant.get("properties"),
+            f"config schema.$defs.detrendConfig.oneOf[{idx}].properties",
+        )
+        method = _as_dict(
+            variant_properties.get("method"),
+            f"config schema.$defs.detrendConfig.oneOf[{idx}].properties.method",
+        ).get("const")
+        _require(
+            isinstance(method, str),
+            f"config schema.$defs.detrendConfig.oneOf[{idx}] method const must be a string",
+        )
+        detrend_by_method[method] = variant
+    _require(
+        set(detrend_by_method) == {"linear", "polynomial"},
+        "config schema.$defs.detrendConfig must define linear and polynomial variants",
+    )
+    polynomial_props = _as_dict(
+        detrend_by_method["polynomial"].get("properties"),
+        "config schema.$defs.detrendConfig polynomial properties",
+    )
+    degree_schema = _as_dict(
+        polynomial_props.get("degree"),
+        "config schema.$defs.detrendConfig polynomial degree",
+    )
+    _require(
+        degree_schema.get("type") == "integer" and degree_schema.get("minimum") == 1,
+        "config schema detrend polynomial degree must be integer with minimum=1",
+    )
+
+    deseasonalize_schema = _as_dict(
+        defs.get("deseasonalizeConfig"), "config schema.$defs.deseasonalizeConfig"
+    )
+    _require(
+        deseasonalize_schema.get("type") == "object",
+        "config schema.$defs.deseasonalizeConfig type must be object",
+    )
+    deseasonalize_variants = _as_list(
+        deseasonalize_schema.get("oneOf"), "config schema.$defs.deseasonalizeConfig.oneOf"
+    )
+    _require(
+        len(deseasonalize_variants) == 2,
+        "config schema.$defs.deseasonalizeConfig.oneOf must contain exactly 2 variants",
+    )
+    deseasonalize_by_method: dict[str, dict[str, Any]] = {}
+    for idx, variant_value in enumerate(deseasonalize_variants):
+        variant = _as_dict(
+            variant_value, f"config schema.$defs.deseasonalizeConfig.oneOf[{idx}]"
+        )
+        _require(
+            variant.get("additionalProperties") is False,
+            f"config schema.$defs.deseasonalizeConfig.oneOf[{idx}] must set additionalProperties=false",
+        )
+        variant_properties = _as_dict(
+            variant.get("properties"),
+            f"config schema.$defs.deseasonalizeConfig.oneOf[{idx}].properties",
+        )
+        method = _as_dict(
+            variant_properties.get("method"),
+            f"config schema.$defs.deseasonalizeConfig.oneOf[{idx}].properties.method",
+        ).get("const")
+        _require(
+            isinstance(method, str),
+            f"config schema.$defs.deseasonalizeConfig.oneOf[{idx}] method const must be a string",
+        )
+        deseasonalize_by_method[method] = variant_properties
+    _require(
+        set(deseasonalize_by_method) == {"differencing", "stl_like"},
+        "config schema.$defs.deseasonalizeConfig must define differencing and stl_like variants",
+    )
+    diff_period = _as_dict(
+        deseasonalize_by_method["differencing"].get("period"),
+        "config schema.$defs.deseasonalizeConfig differencing period",
+    )
+    stl_period = _as_dict(
+        deseasonalize_by_method["stl_like"].get("period"),
+        "config schema.$defs.deseasonalizeConfig stl_like period",
+    )
+    _require(
+        diff_period.get("type") == "integer" and diff_period.get("minimum") == 1,
+        "config schema differencing period must be integer with minimum=1",
+    )
+    _require(
+        stl_period.get("type") == "integer" and stl_period.get("minimum") == 2,
+        "config schema stl_like period must be integer with minimum=2",
+    )
+
+    winsorize_schema = _as_dict(
+        defs.get("winsorizeConfig"), "config schema.$defs.winsorizeConfig"
+    )
+    _require(
+        winsorize_schema.get("type") == "object"
+        and winsorize_schema.get("additionalProperties") is False,
+        "config schema.$defs.winsorizeConfig must be closed object",
+    )
+    winsorize_properties = _as_dict(
+        winsorize_schema.get("properties"), "config schema.$defs.winsorizeConfig.properties"
+    )
+    for key in ("lower_quantile", "upper_quantile"):
+        quantile = _as_dict(
+            winsorize_properties.get(key),
+            f"config schema.$defs.winsorizeConfig.{key}",
+        )
+        _require(
+            quantile.get("type") == "number"
+            and quantile.get("minimum") == 0.0
+            and quantile.get("maximum") == 1.0,
+            f"config schema.$defs.winsorizeConfig.{key} must be number within [0, 1]",
+        )
+
+    robust_scale_schema = _as_dict(
+        defs.get("robustScaleConfig"), "config schema.$defs.robustScaleConfig"
+    )
+    _require(
+        robust_scale_schema.get("type") == "object"
+        and robust_scale_schema.get("additionalProperties") is False,
+        "config schema.$defs.robustScaleConfig must be closed object",
+    )
+    robust_scale_properties = _as_dict(
+        robust_scale_schema.get("properties"),
+        "config schema.$defs.robustScaleConfig.properties",
+    )
+    for key in ("mad_epsilon", "normal_consistency"):
+        value_schema = _as_dict(
+            robust_scale_properties.get(key),
+            f"config schema.$defs.robustScaleConfig.{key}",
+        )
+        _require(
+            value_schema.get("type") == "number"
+            and value_schema.get("exclusiveMinimum") == 0.0,
+            f"config schema.$defs.robustScaleConfig.{key} must be number with exclusiveMinimum=0",
+        )
 
 
 def validate_checkpoint_schema(schema: dict[str, Any]) -> None:
@@ -331,7 +656,9 @@ def validate_config_fixture(payload: dict[str, Any]) -> None:
         payload.get("kind") == "pipeline_spec",
         "config fixture kind must be 'pipeline_spec'",
     )
-    _as_dict(payload.get("payload"), "config fixture.payload")
+    fixture_payload = _as_dict(payload.get("payload"), "config fixture.payload")
+    preprocess = _as_dict(fixture_payload.get("preprocess"), "config fixture.payload.preprocess")
+    _validate_preprocess_fixture(preprocess, "config fixture.payload.preprocess")
 
 
 def validate_checkpoint_fixture(payload: dict[str, Any]) -> None:

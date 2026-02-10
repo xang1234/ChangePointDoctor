@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://cpd-rs.dev/schemas/config/pipeline_spec.v0.schema.json",
   "title": "PipelineSpec (Provisional) v0",
-  "description": "Provisional stub schema. This envelope is versioned now and will be tightened when PipelineSpec is implemented.",
+  "description": "Provisional schema envelope with explicit preprocessing config contract for detect_offline-compatible payloads.",
   "type": "object",
   "required": [
     "schema_version",
@@ -18,8 +18,160 @@
     },
     "payload": {
       "type": "object",
+      "properties": {
+        "preprocess": {
+          "$ref": "#/$defs/preprocessConfig"
+        }
+      },
       "additionalProperties": true
     }
   },
-  "additionalProperties": true
+  "additionalProperties": true,
+  "$defs": {
+    "preprocessConfig": {
+      "type": "object",
+      "properties": {
+        "detrend": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/detrendConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "deseasonalize": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/deseasonalizeConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "winsorize": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/winsorizeConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "robust_scale": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/robustScaleConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "detrendConfig": {
+      "type": "object",
+      "oneOf": [
+        {
+          "required": [
+            "method"
+          ],
+          "properties": {
+            "method": {
+              "const": "linear"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "required": [
+            "method",
+            "degree"
+          ],
+          "properties": {
+            "method": {
+              "const": "polynomial"
+            },
+            "degree": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "deseasonalizeConfig": {
+      "type": "object",
+      "oneOf": [
+        {
+          "required": [
+            "method",
+            "period"
+          ],
+          "properties": {
+            "method": {
+              "const": "differencing"
+            },
+            "period": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "required": [
+            "method",
+            "period"
+          ],
+          "properties": {
+            "method": {
+              "const": "stl_like"
+            },
+            "period": {
+              "type": "integer",
+              "minimum": 2
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "winsorizeConfig": {
+      "type": "object",
+      "properties": {
+        "lower_quantile": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0
+        },
+        "upper_quantile": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "robustScaleConfig": {
+      "type": "object",
+      "properties": {
+        "mad_epsilon": {
+          "type": "number",
+          "exclusiveMinimum": 0.0
+        },
+        "normal_consistency": {
+          "type": "number",
+          "exclusiveMinimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    }
+  }
 }

@@ -14,7 +14,32 @@ const DEFAULT_MAD_EPSILON: f64 = 1.0e-9;
 #[cfg(feature = "preprocess")]
 const DEFAULT_NORMAL_CONSISTENCY: f64 = 1.4826;
 
+#[cfg(all(feature = "preprocess", feature = "serde"))]
+fn default_winsor_lower() -> f64 {
+    DEFAULT_WINSOR_LOWER
+}
+
+#[cfg(all(feature = "preprocess", feature = "serde"))]
+fn default_winsor_upper() -> f64 {
+    DEFAULT_WINSOR_UPPER
+}
+
+#[cfg(all(feature = "preprocess", feature = "serde"))]
+fn default_mad_epsilon() -> f64 {
+    DEFAULT_MAD_EPSILON
+}
+
+#[cfg(all(feature = "preprocess", feature = "serde"))]
+fn default_normal_consistency() -> f64 {
+    DEFAULT_NORMAL_CONSISTENCY
+}
+
 #[cfg(feature = "preprocess")]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    feature = "serde",
+    serde(tag = "method", rename_all = "snake_case", deny_unknown_fields)
+)]
 #[derive(Clone, Debug, PartialEq)]
 pub enum DetrendMethod {
     Linear,
@@ -22,12 +47,19 @@ pub enum DetrendMethod {
 }
 
 #[cfg(feature = "preprocess")]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(transparent))]
 #[derive(Clone, Debug, PartialEq)]
 pub struct DetrendConfig {
     pub method: DetrendMethod,
 }
 
 #[cfg(feature = "preprocess")]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    feature = "serde",
+    serde(tag = "method", rename_all = "snake_case", deny_unknown_fields)
+)]
 #[derive(Clone, Debug, PartialEq)]
 pub enum DeseasonalizeMethod {
     Differencing { period: usize },
@@ -35,15 +67,21 @@ pub enum DeseasonalizeMethod {
 }
 
 #[cfg(feature = "preprocess")]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(transparent))]
 #[derive(Clone, Debug, PartialEq)]
 pub struct DeseasonalizeConfig {
     pub method: DeseasonalizeMethod,
 }
 
 #[cfg(feature = "preprocess")]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
 #[derive(Clone, Debug, PartialEq)]
 pub struct WinsorizeConfig {
+    #[cfg_attr(feature = "serde", serde(default = "default_winsor_lower"))]
     pub lower_quantile: f64,
+    #[cfg_attr(feature = "serde", serde(default = "default_winsor_upper"))]
     pub upper_quantile: f64,
 }
 
@@ -58,9 +96,13 @@ impl Default for WinsorizeConfig {
 }
 
 #[cfg(feature = "preprocess")]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
 #[derive(Clone, Debug, PartialEq)]
 pub struct RobustScaleConfig {
+    #[cfg_attr(feature = "serde", serde(default = "default_mad_epsilon"))]
     pub mad_epsilon: f64,
+    #[cfg_attr(feature = "serde", serde(default = "default_normal_consistency"))]
     pub normal_consistency: f64,
 }
 
@@ -75,11 +117,29 @@ impl Default for RobustScaleConfig {
 }
 
 #[cfg(feature = "preprocess")]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct PreprocessConfig {
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
     pub detrend: Option<DetrendConfig>,
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
     pub deseasonalize: Option<DeseasonalizeConfig>,
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
     pub winsorize: Option<WinsorizeConfig>,
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
     pub robust_scale: Option<RobustScaleConfig>,
 }
 
@@ -1362,5 +1422,173 @@ mod preprocess_tests {
 
         let view_roundtrip = out.as_view().expect("roundtrip view should succeed");
         assert_eq!(view_roundtrip.n_missing(), 2);
+    }
+}
+
+#[cfg(all(test, feature = "preprocess", feature = "serde"))]
+mod serde_tests {
+    use super::{
+        DeseasonalizeConfig, DeseasonalizeMethod, DetrendConfig, DetrendMethod, PreprocessConfig,
+        RobustScaleConfig, WinsorizeConfig,
+    };
+    use serde_json::{Value, json};
+
+    fn expect_unknown_field(err: serde_json::Error) {
+        assert!(
+            err.to_string().contains("unknown field"),
+            "expected unknown field error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn preprocess_config_serde_roundtrip_matches_documented_shape() {
+        let config = PreprocessConfig {
+            detrend: Some(DetrendConfig {
+                method: DetrendMethod::Polynomial { degree: 2 },
+            }),
+            deseasonalize: Some(DeseasonalizeConfig {
+                method: DeseasonalizeMethod::StlLike { period: 4 },
+            }),
+            winsorize: Some(WinsorizeConfig {
+                lower_quantile: 0.05,
+                upper_quantile: 0.95,
+            }),
+            robust_scale: Some(RobustScaleConfig {
+                mad_epsilon: 1e-9,
+                normal_consistency: 1.4826,
+            }),
+        };
+
+        let encoded = serde_json::to_value(&config).expect("config should serialize");
+        assert_eq!(
+            encoded,
+            json!({
+                "detrend": {"method": "polynomial", "degree": 2},
+                "deseasonalize": {"method": "stl_like", "period": 4},
+                "winsorize": {"lower_quantile": 0.05, "upper_quantile": 0.95},
+                "robust_scale": {"mad_epsilon": 1e-9, "normal_consistency": 1.4826}
+            })
+        );
+
+        let decoded: PreprocessConfig =
+            serde_json::from_value(encoded).expect("config should deserialize");
+        assert_eq!(decoded, config);
+    }
+
+    #[test]
+    fn detrend_method_variants_roundtrip() {
+        let linear: DetrendConfig =
+            serde_json::from_value(json!({"method": "linear"})).expect("linear should deserialize");
+        assert_eq!(linear.method, DetrendMethod::Linear);
+        assert_eq!(
+            serde_json::to_value(&linear).expect("linear should serialize"),
+            json!({"method": "linear"})
+        );
+
+        let polynomial: DetrendConfig = serde_json::from_value(json!({
+            "method": "polynomial",
+            "degree": 3
+        }))
+        .expect("polynomial should deserialize");
+        assert_eq!(polynomial.method, DetrendMethod::Polynomial { degree: 3 });
+        assert_eq!(
+            serde_json::to_value(&polynomial).expect("polynomial should serialize"),
+            json!({"method": "polynomial", "degree": 3})
+        );
+    }
+
+    #[test]
+    fn deseasonalize_method_variants_roundtrip() {
+        let differencing: DeseasonalizeConfig = serde_json::from_value(json!({
+            "method": "differencing",
+            "period": 3
+        }))
+        .expect("differencing should deserialize");
+        assert_eq!(
+            differencing.method,
+            DeseasonalizeMethod::Differencing { period: 3 }
+        );
+        assert_eq!(
+            serde_json::to_value(&differencing).expect("differencing should serialize"),
+            json!({"method": "differencing", "period": 3})
+        );
+
+        let stl_like: DeseasonalizeConfig = serde_json::from_value(json!({
+            "method": "stl_like",
+            "period": 5
+        }))
+        .expect("stl_like should deserialize");
+        assert_eq!(stl_like.method, DeseasonalizeMethod::StlLike { period: 5 });
+        assert_eq!(
+            serde_json::to_value(&stl_like).expect("stl_like should serialize"),
+            json!({"method": "stl_like", "period": 5})
+        );
+    }
+
+    #[test]
+    fn winsorize_and_robust_scale_use_defaults_for_empty_objects() {
+        let decoded: PreprocessConfig = serde_json::from_value(json!({
+            "winsorize": {},
+            "robust_scale": {}
+        }))
+        .expect("empty stage objects should deserialize with defaults");
+
+        assert_eq!(decoded.winsorize, Some(WinsorizeConfig::default()));
+        assert_eq!(decoded.robust_scale, Some(RobustScaleConfig::default()));
+
+        let encoded = serde_json::to_value(&decoded).expect("config should serialize");
+        let winsorize = encoded
+            .get("winsorize")
+            .expect("winsorize should serialize with defaults");
+        let robust_scale = encoded
+            .get("robust_scale")
+            .expect("robust_scale should serialize with defaults");
+        assert_eq!(
+            winsorize
+                .get("lower_quantile")
+                .and_then(Value::as_f64)
+                .expect("lower_quantile should be numeric"),
+            0.01
+        );
+        assert_eq!(
+            winsorize
+                .get("upper_quantile")
+                .and_then(Value::as_f64)
+                .expect("upper_quantile should be numeric"),
+            0.99
+        );
+        assert_eq!(
+            robust_scale
+                .get("mad_epsilon")
+                .and_then(Value::as_f64)
+                .expect("mad_epsilon should be numeric"),
+            1.0e-9
+        );
+        assert_eq!(
+            robust_scale
+                .get("normal_consistency")
+                .and_then(Value::as_f64)
+                .expect("normal_consistency should be numeric"),
+            1.4826
+        );
+    }
+
+    #[test]
+    fn serde_rejects_unknown_preprocess_keys() {
+        let top_level_err = serde_json::from_value::<PreprocessConfig>(json!({
+            "unknown_stage": {}
+        }))
+        .expect_err("unknown top-level stage should fail");
+        expect_unknown_field(top_level_err);
+
+        let winsorize_err = serde_json::from_value::<PreprocessConfig>(json!({
+            "winsorize": {
+                "lower_quantile": 0.1,
+                "upper_quantile": 0.9,
+                "extra": true
+            }
+        }))
+        .expect_err("unknown winsorize field should fail");
+        expect_unknown_field(winsorize_err);
     }
 }

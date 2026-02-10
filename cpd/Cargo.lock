@@ -196,6 +196,8 @@ name = "cpd-preprocess"
 version = "0.1.0"
 dependencies = [
  "cpd-core",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

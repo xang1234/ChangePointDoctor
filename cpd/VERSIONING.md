@@ -45,6 +45,32 @@ A top-level envelope marker for result payloads is planned as a future migration
 for `1.x` contracts. Until then, readers and writers should rely on
 `diagnostics.schema_version`.
 
+### Config payload contract in `0.x` (`pipeline_spec.v0`)
+
+`pipeline_spec.v0` now includes an explicit optional
+`payload.preprocess` object. Canonical preprocess stage keys are:
+
+- `detrend`
+- `deseasonalize`
+- `winsorize`
+- `robust_scale`
+
+Method variants:
+
+- `detrend`: `{"method":"linear"}` or
+  `{"method":"polynomial","degree":<int>=1}`
+- `deseasonalize`: `{"method":"differencing","period":<int>=1}` or
+  `{"method":"stl_like","period":<int>=2}`
+
+Parameter defaults and validation semantics:
+
+- `winsorize` defaults to `lower_quantile=0.01`, `upper_quantile=0.99`,
+  with required invariant `0.0 <= lower < upper <= 1.0`.
+- `robust_scale` defaults to `mad_epsilon=1e-9`,
+  `normal_consistency=1.4826`; both must be finite and `> 0`.
+- Unknown keys inside `payload.preprocess` and inside each preprocess stage
+  are rejected by runtime parsers.
+
 ### Unknown fields
 
 - Readers should ignore unknown fields by default.

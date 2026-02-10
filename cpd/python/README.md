@@ -46,9 +46,37 @@ low = cpd.detect_offline(
     cost="l2",
     constraints={"min_segment_len": 2},
     stopping={"n_bkps": 2},
-    preprocess={"winsorize": {}, "robust_scale": {}},  # optional; requires preprocess feature
+    preprocess={
+        "detrend": {"method": "polynomial", "degree": 2},
+        "deseasonalize": {"method": "stl_like", "period": 4},
+        "winsorize": {"lower_quantile": 0.05, "upper_quantile": 0.95},
+        "robust_scale": {"mad_epsilon": 1e-9, "normal_consistency": 1.4826},
+    },  # optional; requires preprocess feature
 )
 ```
+
+## Preprocess Config Contract
+
+`detect_offline(..., preprocess=...)` validates keys and method payloads.
+Unknown preprocess stage keys fail with `ValueError`.
+
+Canonical shape:
+
+```python
+preprocess = {
+    "detrend": {"method": "linear"},  # or {"method": "polynomial", "degree": 2}
+    "deseasonalize": {"method": "differencing", "period": 2},  # or method="stl_like" (period >= 2)
+    "winsorize": {"lower_quantile": 0.05, "upper_quantile": 0.95},  # optional fields
+    "robust_scale": {"mad_epsilon": 1e-9, "normal_consistency": 1.4826},  # optional fields
+}
+```
+
+Validation details:
+
+- `detrend.method`: `"linear"` or `"polynomial"` (`degree` required for polynomial).
+- `deseasonalize.method`: `"differencing"` (`period >= 1`) or `"stl_like"` (`period >= 2`).
+- `winsorize`: defaults to `lower_quantile=0.01`, `upper_quantile=0.99` when omitted.
+- `robust_scale`: defaults to `mad_epsilon=1e-9`, `normal_consistency=1.4826` when omitted.
 
 ## Example Scripts
 
