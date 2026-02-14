@@ -4,9 +4,13 @@
 
 pub mod binseg;
 pub mod pelt;
+#[cfg(feature = "serde")]
+pub mod schema_migration;
 
 pub use binseg::{BinSeg, BinSegConfig};
 pub use pelt::{Pelt, PeltConfig};
+#[cfg(feature = "serde")]
+pub use schema_migration::{BinSegConfigWire, PeltConfigWire};
 
 /// Offline detector namespace placeholder.
 pub fn crate_name() -> &'static str {

@@ -5,6 +5,7 @@
 use crate::CpdError;
 
 /// Penalty specification for offline segmentation algorithms.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug, PartialEq)]
 pub enum Penalty {
     BIC,
@@ -13,6 +14,7 @@ pub enum Penalty {
 }
 
 /// Stopping strategy for offline segmentation algorithms.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug, PartialEq)]
 pub enum Stopping {
     KnownK(usize),

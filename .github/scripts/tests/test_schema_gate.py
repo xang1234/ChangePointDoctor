@@ -33,6 +33,82 @@ class SchemaGateTests(unittest.TestCase):
         )
         return schema_gate._as_dict(schema_gate._read_json(schema_path), str(schema_path))
 
+    @staticmethod
+    def _valid_constraints_migration_fixture() -> dict:
+        return {
+            "schema_version": 1,
+            "min_segment_len": 2,
+            "max_change_points": None,
+            "max_depth": None,
+            "candidate_splits": None,
+            "jump": 1,
+            "time_budget_ms": None,
+            "max_cost_evals": None,
+            "memory_budget_bytes": None,
+            "max_cache_bytes": None,
+            "cache_policy": "Full",
+            "degradation_plan": [],
+            "allow_algorithm_fallback": False,
+        }
+
+    @staticmethod
+    def _valid_offline_config_migration_fixture() -> dict:
+        return {
+            "schema_version": 1,
+            "stopping": {"Penalized": "BIC"},
+            "params_per_segment": 2,
+            "cancel_check_every": 1000,
+        }
+
+    @staticmethod
+    def _valid_result_fixture_with_version(schema_version: int) -> dict:
+        return {
+            "breakpoints": [10, 20],
+            "change_points": [10],
+            "scores": [0.5],
+            "segments": [
+                {
+                    "start": 0,
+                    "end": 10,
+                    "mean": [1.0],
+                    "variance": [0.1],
+                    "count": 10,
+                    "missing_count": 0,
+                },
+                {
+                    "start": 10,
+                    "end": 20,
+                    "mean": [2.0],
+                    "variance": [0.2],
+                    "count": 10,
+                    "missing_count": 0,
+                },
+            ],
+            "diagnostics": {
+                "n": 20,
+                "d": 1,
+                "schema_version": schema_version,
+                "algorithm": "pelt",
+                "cost_model": "l2_mean",
+                "repro_mode": "Balanced",
+                "notes": [],
+                "warnings": [],
+            },
+        }
+
+    @staticmethod
+    def _valid_diagnostics_migration_fixture(schema_version: int) -> dict:
+        return {
+            "n": 20,
+            "d": 1,
+            "schema_version": schema_version,
+            "algorithm": "pelt",
+            "cost_model": "l2_mean",
+            "repro_mode": "Balanced",
+            "notes": [],
+            "warnings": [],
+        }
+
     def test_validate_repo_passes_for_workspace(self):
         errors = schema_gate.validate_repo(schema_gate.REPO_ROOT)
         self.assertEqual(errors, [])
@@ -124,6 +200,35 @@ class SchemaGateTests(unittest.TestCase):
                     "payload": {},
                 }
             )
+
+    def test_result_fixture_rejects_v2_by_default(self):
+        fixture = self._valid_result_fixture_with_version(2)
+        with self.assertRaisesRegex(ValueError, "schema_version"):
+            schema_gate.validate_result_fixture(fixture)
+
+    def test_result_fixture_accepts_v2_when_requested(self):
+        fixture = self._valid_result_fixture_with_version(2)
+        schema_gate.validate_result_fixture(
+            fixture, schema_gate.MIGRATION_SUPPORTED_SCHEMA_VERSIONS
+        )
+
+    def test_constraints_migration_fixture_rejects_unsupported_version(self):
+        fixture = self._valid_constraints_migration_fixture()
+        fixture["schema_version"] = 7
+        with self.assertRaisesRegex(ValueError, "schema_version"):
+            schema_gate.validate_constraints_migration_fixture(fixture)
+
+    def test_offline_config_migration_fixture_requires_stopping_object(self):
+        fixture = self._valid_offline_config_migration_fixture()
+        fixture["stopping"] = "Penalized"
+        with self.assertRaisesRegex(ValueError, "stopping must be an object"):
+            schema_gate.validate_offline_config_migration_fixture(
+                fixture, "pelt migration fixture"
+            )
+
+    def test_diagnostics_migration_fixture_accepts_v2(self):
+        fixture = self._valid_diagnostics_migration_fixture(2)
+        schema_gate.validate_diagnostics_migration_fixture(fixture)
 
 
 if __name__ == "__main__":

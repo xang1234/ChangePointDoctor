@@ -13,6 +13,8 @@ pub mod numerics;
 pub mod observability;
 pub mod repro;
 pub mod results;
+#[cfg(feature = "serde")]
+pub mod schema_migration;
 pub mod stopping;
 pub mod time_series;
 
@@ -37,6 +39,12 @@ pub use observability::{NoopProgressSink, NoopTelemetrySink, ProgressSink, Telem
 pub use repro::ReproMode;
 pub use results::{
     OfflineChangePointResult, SegmentStats, segments_from_breakpoints, validate_breakpoints,
+};
+#[cfg(feature = "serde")]
+pub use schema_migration::{
+    CURRENT_SCHEMA_VERSION, ConstraintsConfigWire, DiagnosticsWire,
+    MAX_FORWARD_COMPAT_SCHEMA_VERSION, MIGRATION_GUIDANCE_PATH, OfflineChangePointResultWire,
+    validate_schema_version,
 };
 pub use stopping::{Penalty, Stopping, penalty_value, validate_penalty, validate_stopping};
 pub use time_series::{DTypeView, MemoryLayout, MissingPolicy, TimeIndex, TimeSeriesView};

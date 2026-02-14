@@ -14,6 +14,7 @@ use std::time::Instant;
 const DEFAULT_CANCEL_CHECK_EVERY: usize = 1000;
 
 /// Configuration for [`BinSeg`].
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug, PartialEq)]
 pub struct BinSegConfig {
     pub stopping: Stopping,
@@ -1087,7 +1088,7 @@ mod tests {
         let ctx = ExecutionContext::new(&constraints);
         let result = detector.detect(&view, &ctx).expect("detect should succeed");
         assert_eq!(result.breakpoints, vec![64]);
-        assert_eq!(result.change_points, vec![]);
+        assert_eq!(result.change_points, Vec::<usize>::new());
     }
 
     #[test]

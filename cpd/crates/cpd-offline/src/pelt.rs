@@ -16,6 +16,7 @@ const KNOWN_K_MAX_DOUBLINGS: usize = 80;
 const KNOWN_K_MAX_BISECTION_ITERS: usize = 64;
 
 /// Configuration for [`Pelt`].
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug, PartialEq)]
 pub struct PeltConfig {
     pub stopping: Stopping,
@@ -948,7 +949,7 @@ mod tests {
         let ctx = ExecutionContext::new(&constraints);
         let result = detector.detect(&view, &ctx).expect("detect should succeed");
         assert_eq!(result.breakpoints, vec![64]);
-        assert_eq!(result.change_points, vec![]);
+        assert_eq!(result.change_points, Vec::<usize>::new());
     }
 
     #[test]

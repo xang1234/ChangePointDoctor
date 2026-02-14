@@ -60,6 +60,11 @@ jobs:
       - name: Run cargo test
         run: cargo test --workspace --all-targets --exclude cpd-bench --exclude cpd-python
 
+      - name: Run schema migration fixture tests (core/offline serde)
+        run: |
+          cargo test -p cpd-core --features serde --lib schema_migration::tests::
+          cargo test -p cpd-offline --features serde --lib schema_migration::tests::
+
   cpd-online-concurrency-smoke:
     name: cpd-online-concurrency-smoke
     runs-on: ubuntu-latest

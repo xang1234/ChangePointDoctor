@@ -15,6 +15,7 @@ SCHEMA_DRAFT_2020_12 = "https://json-schema.org/draft/2020-12/schema"
 CRC32_RE = re.compile(r"^[0-9a-f]{8}$")
 
 RESULT_REQUIRED_ROOT = {"breakpoints", "change_points", "diagnostics"}
+MIGRATION_SUPPORTED_SCHEMA_VERSIONS = {1, 2}
 RESULT_DIAGNOSTICS_REQUIRED = {
     "n",
     "d",
@@ -25,6 +26,27 @@ RESULT_DIAGNOSTICS_REQUIRED = {
 }
 SEGMENT_REQUIRED = {"start", "end", "count", "missing_count"}
 CONFIG_REQUIRED = {"schema_version", "kind", "payload"}
+CONSTRAINTS_MIGRATION_REQUIRED = {
+    "schema_version",
+    "min_segment_len",
+    "max_change_points",
+    "max_depth",
+    "candidate_splits",
+    "jump",
+    "time_budget_ms",
+    "max_cost_evals",
+    "memory_budget_bytes",
+    "max_cache_bytes",
+    "cache_policy",
+    "degradation_plan",
+    "allow_algorithm_fallback",
+}
+OFFLINE_CONFIG_MIGRATION_REQUIRED = {
+    "schema_version",
+    "stopping",
+    "params_per_segment",
+    "cancel_check_every",
+}
 CHECKPOINT_REQUIRED = {
     "schema_version",
     "detector_id",
@@ -93,6 +115,19 @@ def _is_number(value: Any) -> bool:
 
 def _is_finite_number(value: Any) -> bool:
     return _is_number(value) and math.isfinite(float(value))
+
+
+def _format_versions(versions: set[int]) -> str:
+    return ", ".join(str(version) for version in sorted(versions))
+
+
+def _validate_schema_version(
+    schema_version: Any, allowed_versions: set[int], context: str
+) -> None:
+    _require(
+        isinstance(schema_version, int) and schema_version in allowed_versions,
+        f"{context} must be one of {{{_format_versions(allowed_versions)}}}",
+    )
 
 
 def _validate_preprocess_fixture(preprocess: dict[str, Any], context: str) -> None:
@@ -512,38 +547,49 @@ def validate_checkpoint_schema(schema: dict[str, Any]) -> None:
     )
 
 
-def validate_result_fixture(payload: dict[str, Any]) -> None:
-    _require_keys(payload, RESULT_REQUIRED_ROOT, "result fixture")
-
-    breakpoints = _as_list(payload.get("breakpoints"), "result fixture.breakpoints")
-    change_points = _as_list(payload.get("change_points"), "result fixture.change_points")
-    diagnostics = _as_dict(payload.get("diagnostics"), "result fixture.diagnostics")
-    _require_keys(diagnostics, RESULT_DIAGNOSTICS_REQUIRED, "result fixture.diagnostics")
+def _validate_diagnostics_object(
+    diagnostics: dict[str, Any], context: str, allowed_schema_versions: set[int]
+) -> tuple[int, int]:
+    _require_keys(diagnostics, RESULT_DIAGNOSTICS_REQUIRED, context)
 
     n = diagnostics.get("n")
     d = diagnostics.get("d")
     schema_version = diagnostics.get("schema_version")
-    _require(isinstance(n, int) and n >= 0, "result fixture diagnostics.n must be int >= 0")
-    _require(isinstance(d, int) and d >= 0, "result fixture diagnostics.d must be int >= 0")
-    _require(
-        isinstance(schema_version, int) and schema_version == 1,
-        "result fixture diagnostics.schema_version must be exactly 1",
+    _require(isinstance(n, int) and n >= 0, f"{context}.n must be int >= 0")
+    _require(isinstance(d, int) and d >= 0, f"{context}.d must be int >= 0")
+    _validate_schema_version(
+        schema_version, allowed_schema_versions, f"{context}.schema_version"
     )
 
     _require(
         isinstance(diagnostics.get("algorithm"), str)
         and bool(diagnostics.get("algorithm")),
-        "result fixture diagnostics.algorithm must be a non-empty string",
+        f"{context}.algorithm must be a non-empty string",
     )
     _require(
         isinstance(diagnostics.get("cost_model"), str)
         and bool(diagnostics.get("cost_model")),
-        "result fixture diagnostics.cost_model must be a non-empty string",
+        f"{context}.cost_model must be a non-empty string",
     )
     _require(
         isinstance(diagnostics.get("repro_mode"), str)
         and bool(diagnostics.get("repro_mode")),
-        "result fixture diagnostics.repro_mode must be a non-empty string",
+        f"{context}.repro_mode must be a non-empty string",
+    )
+    return n, d
+
+
+def validate_result_fixture(
+    payload: dict[str, Any], allowed_schema_versions: set[int] | None = None
+) -> None:
+    _require_keys(payload, RESULT_REQUIRED_ROOT, "result fixture")
+
+    breakpoints = _as_list(payload.get("breakpoints"), "result fixture.breakpoints")
+    change_points = _as_list(payload.get("change_points"), "result fixture.change_points")
+    diagnostics = _as_dict(payload.get("diagnostics"), "result fixture.diagnostics")
+    versions = allowed_schema_versions if allowed_schema_versions is not None else {1}
+    n, d = _validate_diagnostics_object(
+        diagnostics, "result fixture.diagnostics", versions
     )
 
     _require(
@@ -647,6 +693,95 @@ def validate_result_fixture(payload: dict[str, Any]) -> None:
                 )
 
 
+def validate_constraints_migration_fixture(payload: dict[str, Any]) -> None:
+    _require_keys(payload, CONSTRAINTS_MIGRATION_REQUIRED, "constraints migration fixture")
+    _validate_schema_version(
+        payload.get("schema_version"),
+        MIGRATION_SUPPORTED_SCHEMA_VERSIONS,
+        "constraints migration fixture.schema_version",
+    )
+
+    min_segment_len = payload.get("min_segment_len")
+    jump = payload.get("jump")
+    _require(
+        isinstance(min_segment_len, int) and min_segment_len >= 1,
+        "constraints migration fixture.min_segment_len must be int >= 1",
+    )
+    _require(
+        isinstance(jump, int) and jump >= 1,
+        "constraints migration fixture.jump must be int >= 1",
+    )
+
+    for field in (
+        "max_change_points",
+        "max_depth",
+        "time_budget_ms",
+        "max_cost_evals",
+        "memory_budget_bytes",
+        "max_cache_bytes",
+    ):
+        value = payload.get(field)
+        _require(
+            value is None or (isinstance(value, int) and value >= 0),
+            f"constraints migration fixture.{field} must be null or int >= 0",
+        )
+
+    candidate_splits = payload.get("candidate_splits")
+    if candidate_splits is not None:
+        splits = _as_list(candidate_splits, "constraints migration fixture.candidate_splits")
+        _require(
+            all(isinstance(split, int) and split > 0 for split in splits),
+            "constraints migration fixture.candidate_splits must contain int > 0",
+        )
+
+    cache_policy = payload.get("cache_policy")
+    _require(
+        isinstance(cache_policy, str) or isinstance(cache_policy, dict),
+        "constraints migration fixture.cache_policy must be a string or object",
+    )
+
+    degradation_plan = payload.get("degradation_plan")
+    _as_list(degradation_plan, "constraints migration fixture.degradation_plan")
+
+    _require(
+        isinstance(payload.get("allow_algorithm_fallback"), bool),
+        "constraints migration fixture.allow_algorithm_fallback must be bool",
+    )
+
+
+def validate_offline_config_migration_fixture(
+    payload: dict[str, Any], context: str
+) -> None:
+    _require_keys(payload, OFFLINE_CONFIG_MIGRATION_REQUIRED, context)
+    _validate_schema_version(
+        payload.get("schema_version"),
+        MIGRATION_SUPPORTED_SCHEMA_VERSIONS,
+        f"{context}.schema_version",
+    )
+    _require(
+        isinstance(payload.get("stopping"), dict),
+        f"{context}.stopping must be an object",
+    )
+    _require(
+        isinstance(payload.get("params_per_segment"), int)
+        and payload.get("params_per_segment") >= 1,
+        f"{context}.params_per_segment must be int >= 1",
+    )
+    _require(
+        isinstance(payload.get("cancel_check_every"), int)
+        and payload.get("cancel_check_every") >= 1,
+        f"{context}.cancel_check_every must be int >= 1",
+    )
+
+
+def validate_diagnostics_migration_fixture(payload: dict[str, Any]) -> None:
+    _validate_diagnostics_object(
+        payload,
+        "diagnostics migration fixture",
+        MIGRATION_SUPPORTED_SCHEMA_VERSIONS,
+    )
+
+
 def validate_config_fixture(payload: dict[str, Any]) -> None:
     _require_keys(payload, CONFIG_REQUIRED, "config fixture")
     _require(
@@ -732,6 +867,56 @@ def validate_repo(repo_root: Path) -> list[str]:
         / "checkpoint"
         / "online_detector_checkpoint.v0.stub.json"
     )
+    migration_constraints_v1_path = (
+        cpd_root / "tests" / "fixtures" / "migrations" / "config" / "constraints.v1.json"
+    )
+    migration_constraints_v2_path = (
+        cpd_root
+        / "tests"
+        / "fixtures"
+        / "migrations"
+        / "config"
+        / "constraints.v2.additive.json"
+    )
+    migration_pelt_v1_path = (
+        cpd_root / "tests" / "fixtures" / "migrations" / "config" / "pelt.v1.json"
+    )
+    migration_pelt_v2_path = (
+        cpd_root / "tests" / "fixtures" / "migrations" / "config" / "pelt.v2.additive.json"
+    )
+    migration_binseg_v1_path = (
+        cpd_root / "tests" / "fixtures" / "migrations" / "config" / "binseg.v1.json"
+    )
+    migration_binseg_v2_path = (
+        cpd_root
+        / "tests"
+        / "fixtures"
+        / "migrations"
+        / "config"
+        / "binseg.v2.additive.json"
+    )
+    migration_result_v1_path = (
+        cpd_root / "tests" / "fixtures" / "migrations" / "result" / "offline_result.v1.json"
+    )
+    migration_result_v2_path = (
+        cpd_root
+        / "tests"
+        / "fixtures"
+        / "migrations"
+        / "result"
+        / "offline_result.v2.additive.json"
+    )
+    migration_diagnostics_v1_path = (
+        cpd_root / "tests" / "fixtures" / "migrations" / "result" / "diagnostics.v1.json"
+    )
+    migration_diagnostics_v2_path = (
+        cpd_root
+        / "tests"
+        / "fixtures"
+        / "migrations"
+        / "result"
+        / "diagnostics.v2.additive.json"
+    )
 
     errors: list[str] = []
     loaded: dict[str, dict[str, Any]] = {}
@@ -742,6 +927,16 @@ def validate_repo(repo_root: Path) -> list[str]:
         "result_fixture": result_fixture_path,
         "config_fixture": config_fixture_path,
         "checkpoint_fixture": checkpoint_fixture_path,
+        "migration_constraints_v1": migration_constraints_v1_path,
+        "migration_constraints_v2": migration_constraints_v2_path,
+        "migration_pelt_v1": migration_pelt_v1_path,
+        "migration_pelt_v2": migration_pelt_v2_path,
+        "migration_binseg_v1": migration_binseg_v1_path,
+        "migration_binseg_v2": migration_binseg_v2_path,
+        "migration_result_v1": migration_result_v1_path,
+        "migration_result_v2": migration_result_v2_path,
+        "migration_diagnostics_v1": migration_diagnostics_v1_path,
+        "migration_diagnostics_v2": migration_diagnostics_v2_path,
     }
 
     for label, path in json_objects.items():
@@ -783,6 +978,116 @@ def validate_repo(repo_root: Path) -> list[str]:
     except ValueError as exc:
         errors.append(f"{checkpoint_fixture_path}: {exc}")
 
+    try:
+        validate_constraints_migration_fixture(loaded["migration_constraints_v1"])
+    except ValueError as exc:
+        errors.append(f"{migration_constraints_v1_path}: {exc}")
+
+    try:
+        validate_constraints_migration_fixture(loaded["migration_constraints_v2"])
+    except ValueError as exc:
+        errors.append(f"{migration_constraints_v2_path}: {exc}")
+
+    try:
+        validate_offline_config_migration_fixture(
+            loaded["migration_pelt_v1"], "pelt migration fixture"
+        )
+    except ValueError as exc:
+        errors.append(f"{migration_pelt_v1_path}: {exc}")
+
+    try:
+        validate_offline_config_migration_fixture(
+            loaded["migration_pelt_v2"], "pelt migration fixture"
+        )
+    except ValueError as exc:
+        errors.append(f"{migration_pelt_v2_path}: {exc}")
+
+    try:
+        validate_offline_config_migration_fixture(
+            loaded["migration_binseg_v1"], "binseg migration fixture"
+        )
+    except ValueError as exc:
+        errors.append(f"{migration_binseg_v1_path}: {exc}")
+
+    try:
+        validate_offline_config_migration_fixture(
+            loaded["migration_binseg_v2"], "binseg migration fixture"
+        )
+    except ValueError as exc:
+        errors.append(f"{migration_binseg_v2_path}: {exc}")
+
+    try:
+        validate_result_fixture(
+            loaded["migration_result_v1"], MIGRATION_SUPPORTED_SCHEMA_VERSIONS
+        )
+    except ValueError as exc:
+        errors.append(f"{migration_result_v1_path}: {exc}")
+
+    try:
+        validate_result_fixture(
+            loaded["migration_result_v2"], MIGRATION_SUPPORTED_SCHEMA_VERSIONS
+        )
+    except ValueError as exc:
+        errors.append(f"{migration_result_v2_path}: {exc}")
+
+    try:
+        validate_diagnostics_migration_fixture(loaded["migration_diagnostics_v1"])
+    except ValueError as exc:
+        errors.append(f"{migration_diagnostics_v1_path}: {exc}")
+
+    try:
+        validate_diagnostics_migration_fixture(loaded["migration_diagnostics_v2"])
+    except ValueError as exc:
+        errors.append(f"{migration_diagnostics_v2_path}: {exc}")
+
+    if loaded["migration_constraints_v1"].get("schema_version") != 1:
+        errors.append(
+            f"{migration_constraints_v1_path}: schema_version must be exactly 1 for v1 fixture"
+        )
+    if loaded["migration_constraints_v2"].get("schema_version") != 2:
+        errors.append(
+            f"{migration_constraints_v2_path}: schema_version must be exactly 2 for v2 fixture"
+        )
+    if loaded["migration_pelt_v1"].get("schema_version") != 1:
+        errors.append(
+            f"{migration_pelt_v1_path}: schema_version must be exactly 1 for v1 fixture"
+        )
+    if loaded["migration_pelt_v2"].get("schema_version") != 2:
+        errors.append(
+            f"{migration_pelt_v2_path}: schema_version must be exactly 2 for v2 fixture"
+        )
+    if loaded["migration_binseg_v1"].get("schema_version") != 1:
+        errors.append(
+            f"{migration_binseg_v1_path}: schema_version must be exactly 1 for v1 fixture"
+        )
+    if loaded["migration_binseg_v2"].get("schema_version") != 2:
+        errors.append(
+            f"{migration_binseg_v2_path}: schema_version must be exactly 2 for v2 fixture"
+        )
+
+    migration_result_v1_diag = loaded["migration_result_v1"].get("diagnostics")
+    migration_result_v2_diag = loaded["migration_result_v2"].get("diagnostics")
+    if not isinstance(migration_result_v1_diag, dict):
+        errors.append(f"{migration_result_v1_path}: diagnostics must be an object")
+    elif migration_result_v1_diag.get("schema_version") != 1:
+        errors.append(
+            f"{migration_result_v1_path}: diagnostics.schema_version must be exactly 1 for v1 fixture"
+        )
+    if not isinstance(migration_result_v2_diag, dict):
+        errors.append(f"{migration_result_v2_path}: diagnostics must be an object")
+    elif migration_result_v2_diag.get("schema_version") != 2:
+        errors.append(
+            f"{migration_result_v2_path}: diagnostics.schema_version must be exactly 2 for v2 fixture"
+        )
+    if loaded["migration_diagnostics_v1"].get("schema_version") != 1:
+        errors.append(
+            f"{migration_diagnostics_v1_path}: schema_version must be exactly 1 for v1 fixture"
+        )
+    if loaded["migration_diagnostics_v2"].get("schema_version") != 2:
+        errors.append(
+            f"{migration_diagnostics_v2_path}: schema_version must be exactly 2 for v2 fixture"
+        )
+
     if errors:
         return errors
 
@@ -804,6 +1109,16 @@ def validate_repo(repo_root: Path) -> list[str]:
         _validate_required_coverage(
             loaded["checkpoint_fixture"], loaded["checkpoint_schema"], "checkpoint"
         )
+        _validate_required_coverage(
+            loaded["migration_result_v1"], loaded["result_schema"], "migration result v1"
+        )
+        _validate_required_coverage(
+            loaded["migration_result_v2"], loaded["result_schema"], "migration result v2"
+        )
+        if loaded["result_fixture"] != loaded["migration_result_v1"]:
+            raise ValueError(
+                "cpd-python offline_result_v1 fixture must match tests/fixtures/migrations/result/offline_result.v1.json"
+            )
     except ValueError as exc:
         errors.append(str(exc))
 

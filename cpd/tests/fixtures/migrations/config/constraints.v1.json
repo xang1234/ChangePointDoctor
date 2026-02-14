@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "min_segment_len": 2,
+  "max_change_points": null,
+  "max_depth": null,
+  "candidate_splits": null,
+  "jump": 1,
+  "time_budget_ms": null,
+  "max_cost_evals": null,
+  "memory_budget_bytes": null,
+  "max_cache_bytes": null,
+  "cache_policy": "Full",
+  "degradation_plan": [],
+  "allow_algorithm_fallback": false
+}

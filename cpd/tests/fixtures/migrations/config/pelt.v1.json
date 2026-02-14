@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "stopping": {
+    "Penalized": "BIC"
+  },
+  "params_per_segment": 2,
+  "cancel_check_every": 1000
+}

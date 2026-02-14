@@ -181,6 +181,8 @@ dependencies = [
  "cpd-core",
  "cpd-costs",
  "proptest",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

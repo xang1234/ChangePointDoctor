@@ -1,0 +1,9 @@
+{
+  "schema_version": 2,
+  "stopping": {
+    "Penalized": "BIC"
+  },
+  "params_per_segment": 2,
+  "cancel_check_every": 1000,
+  "future_pelt_flag": "enabled"
+}

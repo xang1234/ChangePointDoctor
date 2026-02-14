@@ -5,6 +5,7 @@
 use crate::CpdError;
 
 /// Cache behavior and memory trade-offs for cost-model precomputation.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug, PartialEq)]
 pub enum CachePolicy {
     Full,
@@ -18,6 +19,7 @@ pub enum CachePolicy {
 }
 
 /// Ordered fallback steps used when operating under soft budget enforcement.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug, PartialEq)]
 pub enum DegradationStep {
     IncreaseJump { factor: usize, max_jump: usize },
@@ -26,6 +28,7 @@ pub enum DegradationStep {
 }
 
 /// User-facing constraints shared across all detector implementations.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug, PartialEq)]
 pub struct Constraints {
     pub min_segment_len: usize,
@@ -62,6 +65,7 @@ impl Default for Constraints {
 }
 
 /// Prevalidated constraints passed into detector execution paths.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug, PartialEq)]
 pub struct ValidatedConstraints {
     pub n: usize,
