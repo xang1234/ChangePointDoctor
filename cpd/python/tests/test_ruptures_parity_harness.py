@@ -107,3 +107,49 @@ def test_select_cases_supports_smoke_and_full() -> None:
     assert smoke
     assert full
     assert len(full) >= len(smoke)
+
+
+def test_run_ruptures_case_pelt_known_k_uses_penalty_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _FakePelt:
+        def __init__(self, model: str, min_size: int, jump: int) -> None:
+            self.calls: list[float] = []
+
+        def fit(self, values: np.ndarray) -> "_FakePelt":
+            return self
+
+        def predict(self, pen: float) -> list[int]:
+            self.calls.append(float(pen))
+            if pen < 0.5:
+                return [2, 4, 6]
+            if pen < 2.0:
+                return [4, 6]
+            return [6]
+
+    class _FakeBinseg:
+        def __init__(self, model: str, min_size: int, jump: int) -> None:
+            pass
+
+        def fit(self, values: np.ndarray) -> "_FakeBinseg":
+            return self
+
+        def predict(self, n_bkps: int | None = None, pen: float | None = None) -> list[int]:
+            _ = (n_bkps, pen)
+            return [6]
+
+    class _FakeRuptures:
+        Pelt = _FakePelt
+        Binseg = _FakeBinseg
+
+    monkeypatch.setattr(ph.importlib, "import_module", lambda name: _FakeRuptures if name == "ruptures" else None)
+
+    values = np.array([0.0, 0.0, 1.0, 1.0, 2.0, 2.0], dtype=np.float64)
+    breakpoints, runtime_ms = ph.run_ruptures_case(
+        values=values,
+        detector="pelt",
+        model="l2",
+        constraints={"min_segment_len": 2, "jump": 1},
+        stopping={"n_bkps": 1},
+    )
+
+    assert breakpoints == [4, 6]
+    assert runtime_ms >= 0.0

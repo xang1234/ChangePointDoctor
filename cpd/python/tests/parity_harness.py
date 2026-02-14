@@ -487,12 +487,98 @@ def run_ruptures_case(
     start = time.perf_counter()
     fit = algo.fit(values)
     if "n_bkps" in stopping:
-        breakpoints = fit.predict(n_bkps=int(stopping["n_bkps"]))
+        target_k = int(stopping["n_bkps"])
+        if detector == "pelt":
+            breakpoints = _ruptures_pelt_predict_known_k(
+                predictor=fit.predict,
+                target_k=target_k,
+                n_samples=values.shape[0],
+            )
+        else:
+            breakpoints = fit.predict(n_bkps=target_k)
     else:
         breakpoints = fit.predict(pen=float(stopping["pen"]))
     runtime_ms = (time.perf_counter() - start) * 1000.0
 
     return [int(bp) for bp in breakpoints], runtime_ms
+
+
+def _ruptures_pelt_predict_known_k(
+    predictor: Any,
+    target_k: int,
+    n_samples: int,
+) -> list[int]:
+    if target_k < 0:
+        raise ValueError(f"target_k must be >= 0; got {target_k}")
+    if n_samples <= 0:
+        raise ValueError(f"n_samples must be >= 1; got {n_samples}")
+
+    cache: dict[float, list[int]] = {}
+
+    def _predict_for_pen(penalty: float) -> list[int]:
+        cached = cache.get(penalty)
+        if cached is not None:
+            return cached
+        predicted = [int(bp) for bp in predictor(pen=penalty)]
+        cache[penalty] = predicted
+        return predicted
+
+    def _n_changes(predicted: list[int]) -> int:
+        if not predicted:
+            return 0
+        return max(0, len(predicted) - 1)
+
+    if target_k == 0:
+        return _predict_for_pen(1.0e12)
+
+    low_pen = 1.0e-12
+    low_pred = _predict_for_pen(low_pen)
+    low_changes = _n_changes(low_pred)
+    if low_changes < target_k:
+        return low_pred
+
+    high_pen = 1.0
+    high_pred = _predict_for_pen(high_pen)
+    high_changes = _n_changes(high_pred)
+    for _ in range(80):
+        if high_changes <= target_k:
+            break
+        high_pen *= 2.0
+        high_pred = _predict_for_pen(high_pen)
+        high_changes = _n_changes(high_pred)
+
+    best_pred = low_pred
+    best_delta = abs(low_changes - target_k)
+    if abs(high_changes - target_k) < best_delta:
+        best_pred = high_pred
+        best_delta = abs(high_changes - target_k)
+
+    if low_changes == target_k:
+        return low_pred
+    if high_changes == target_k:
+        return high_pred
+
+    if high_changes > target_k:
+        return high_pred if abs(high_changes - target_k) <= best_delta else best_pred
+
+    left_pen = low_pen
+    right_pen = high_pen
+    for _ in range(64):
+        mid_pen = 0.5 * (left_pen + right_pen)
+        mid_pred = _predict_for_pen(mid_pen)
+        mid_changes = _n_changes(mid_pred)
+        delta = abs(mid_changes - target_k)
+        if delta < best_delta:
+            best_pred = mid_pred
+            best_delta = delta
+        if mid_changes == target_k:
+            return mid_pred
+        if mid_changes > target_k:
+            left_pen = mid_pen
+        else:
+            right_pen = mid_pen
+
+    return best_pred
 
 
 def _change_points(breakpoints: list[int]) -> list[int]:

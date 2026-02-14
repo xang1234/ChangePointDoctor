@@ -15,10 +15,7 @@ import parity_harness as ph
 if importlib.util.find_spec("ruptures") is None:
     pytest.skip("ruptures is required for parity tests", allow_module_level=True)
 
-try:
-    import cpd as _cpd_import_check  # noqa: F401
-except Exception as exc:  # pragma: no cover - local-env guard
-    pytest.skip(f"cpd extension is required for parity tests: {exc}", allow_module_level=True)
+import cpd as _cpd_import_check  # noqa: F401
 
 
 MANIFEST_PATH = TESTS_DIR / "fixtures" / "parity" / "corpus_manifest.v1.json"
