@@ -30,6 +30,13 @@ before debugging `pyo3`/linker errors.
 
 See [`QUICKSTART.md`](./QUICKSTART.md) for a full walkthrough.
 
+## Reproducibility Modes
+
+`detect_offline(..., repro_mode=...)` supports `strict`, `balanced` (default),
+and `fast`.
+For deterministic contracts, cross-platform expectations, and tolerance gates,
+see [`../docs/reproducibility_modes.md`](../docs/reproducibility_modes.md).
+
 Minimal example:
 
 ```python

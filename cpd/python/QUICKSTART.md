@@ -41,6 +41,9 @@ Expected breakpoints:
 
 ## 3. Use low-level `detect_offline(...)`
 
+For mode semantics (`strict`/`balanced`/`fast`) and reproducibility guarantees,
+see [`../docs/reproducibility_modes.md`](../docs/reproducibility_modes.md).
+
 ```python
 low_level = cpd.detect_offline(
     x,
