@@ -289,6 +289,58 @@ jobs:
           PYTHON_BIN=$(python -c "import sys; print(sys.executable)")
           PYO3_PYTHON="${PYTHON_BIN}" cargo test -p cpd-python --features serde --lib result_objects::tests::
 
+  python-ruptures-parity-smoke:
+    name: python-ruptures-parity-smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        shell: bash
+        working-directory: cpd/python
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: cpd
+
+      - name: Build and install Python extension
+        run: |
+          python -m pip install --upgrade pip maturin numpy pytest ruptures
+          maturin build --release --interpreter python
+          python - <<'PY'
+          from pathlib import Path
+          import subprocess
+          import sys
+
+          wheels = sorted(Path("../target/wheels").glob("cpd_rs-*.whl"))
+          if len(wheels) != 1:
+              raise SystemExit(
+                  f"expected exactly one cpd-rs wheel, found {len(wheels)}: {[str(w) for w in wheels]}"
+              )
+          subprocess.check_call(
+              [sys.executable, "-m", "pip", "install", "--force-reinstall", str(wheels[0])]
+          )
+          PY
+
+      - name: Run parity harness unit tests
+        run: pytest -q tests/test_ruptures_parity_harness.py
+
+      - name: Run ruptures parity smoke profile
+        env:
+          CPD_PARITY_PROFILE: smoke
+        run: pytest -q tests/test_ruptures_parity.py
+
   coverage-mvp-a:
     name: coverage-mvp-a
     runs-on: ubuntu-latest

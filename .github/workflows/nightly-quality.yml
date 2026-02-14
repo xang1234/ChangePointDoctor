@@ -213,3 +213,60 @@ jobs:
           name: nightly-benchmark-report
           path: cpd/nightly-benchmark.json
           if-no-files-found: error
+
+  python-ruptures-parity-full:
+    name: python-ruptures-parity-full
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+        working-directory: cpd/python
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: cpd
+
+      - name: Build and install Python extension
+        run: |
+          python -m pip install --upgrade pip maturin numpy pytest ruptures
+          maturin build --release --interpreter python
+          python - <<'PY'
+          from pathlib import Path
+          import subprocess
+          import sys
+
+          wheels = sorted(Path("../target/wheels").glob("cpd_rs-*.whl"))
+          if len(wheels) != 1:
+              raise SystemExit(
+                  f"expected exactly one cpd-rs wheel, found {len(wheels)}: {[str(w) for w in wheels]}"
+              )
+          subprocess.check_call(
+              [sys.executable, "-m", "pip", "install", "--force-reinstall", str(wheels[0])]
+          )
+          PY
+
+      - name: Run ruptures parity full profile
+        env:
+          CPD_PARITY_PROFILE: full
+          CPD_PARITY_REPORT_OUT: ../parity-report.json
+        run: pytest -q tests/test_ruptures_parity.py
+
+      - name: Upload nightly parity report
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-ruptures-parity-report
+          path: cpd/parity-report.json
+          if-no-files-found: error

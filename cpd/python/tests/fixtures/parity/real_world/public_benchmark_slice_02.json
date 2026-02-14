@@ -1,0 +1,11 @@
+{
+  "dataset": "toy-public-corpus-02",
+  "source": "public benchmark-inspired four-regime slice",
+  "license": "CC-BY-compatible synthetic derivative",
+  "values": [
+    -3.0, -3.0, -3.0, -3.0, -3.0, -3.0, -3.0, -3.0,
+    -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0,
+    1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0,
+    3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0
+  ]
+}

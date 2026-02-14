@@ -1,0 +1,2899 @@
+{
+  "manifest_version": 1,
+  "suite": "cpd_l15_ruptures_parity",
+  "description": "Curated differential corpus for cpd-rs vs ruptures parity (MVP-B).",
+  "cases": [
+    {
+      "id": "step_01",
+      "category": "synthetic_step",
+      "source": "synthetic",
+      "expected_behavior": "detect 1 dominant mean-shift breakpoints under moderate noise",
+      "signal_spec": {
+        "kind": "piecewise_constant",
+        "seed": 1100,
+        "segments": [
+          {
+            "length": 30,
+            "mean": 0.0
+          },
+          {
+            "length": 30,
+            "mean": 4.0
+          }
+        ],
+        "noise": {
+          "distribution": "normal",
+          "std": 0.2
+        }
+      },
+      "constraints": {
+        "min_segment_len": 2,
+        "jump": 1
+      },
+      "stopping": {
+        "n_bkps": 1
+      },
+      "enabled_detectors": [
+        "pelt",
+        "binseg"
+      ],
+      "enabled_models": [
+        "l2",
+        "normal"
+      ],
+      "tolerance": {
+        "index": 2
+      },
+      "profile_tags": [
+        "smoke",
+        "full"
+      ]
+    },
+    {
+      "id": "step_02",
+      "category": "synthetic_step",
+      "source": "synthetic",
+      "expected_behavior": "detect 1 dominant mean-shift breakpoints under moderate noise",
+      "signal_spec": {
+        "kind": "piecewise_constant",
+        "seed": 1101,
+        "segments": [
+          {
+            "length": 30,
+            "mean": -2.0
+          },
+          {
+            "length": 30,
+            "mean": 3.0
+          }
+        ],
+        "noise": {
+          "distribution": "normal",
+          "std": 0.4
+        }
+      },
+      "constraints": {
+        "min_segment_len": 2,
+        "jump": 1
+      },
+      "stopping": {
+        "n_bkps": 1
+      },
+      "enabled_detectors": [
+        "pelt",
+        "binseg"
+      ],
+      "enabled_models": [
+        "l2",
+        "normal"
+      ],
+      "tolerance": {
+        "index": 2
+      },
+      "profile_tags": [
+        "smoke",
+        "full"
+      ]
+    },
+    {
+      "id": "step_03",
+      "category": "synthetic_step",
+      "source": "synthetic",
+      "expected_behavior": "detect 1 dominant mean-shift breakpoints under moderate noise",
+      "signal_spec": {
+        "kind": "piecewise_constant",
+        "seed": 1102,
+        "segments": [
+          {
+            "length": 40,
+            "mean": 1.0
+          },
+          {
+            "length": 20,
+            "mean": -2.0
+          }
+        ],
+        "noise": {
+          "distribution": "normal",
+          "std": 0.3
+        }
+      },
+      "constraints": {
+        "min_segment_len": 2,
+        "jump": 1
+      },
+      "stopping": {
+        "n_bkps": 1
+      },
+      "enabled_detectors": [
+        "pelt",
+        "binseg"
+      ],
+      "enabled_models": [
+        "l2",
+        "normal"
+      ],
+      "tolerance": {
+        "index": 2
+      },
+      "profile_tags": [
+        "full"
+      ]
+    },
+    {
+      "id": "step_04",
+      "category": "synthetic_step",
+      "source": "synthetic",
+      "expected_behavior": "detect 1 dominant mean-shift breakpoints under moderate noise",
+      "signal_spec": {
+        "kind": "piecewise_constant",
+        "seed": 1103,
+        "segments": [
+          {
+            "length": 20,
+            "mean": 0.5
+          },
+          {
+            "length": 40,
+            "mean": 2.5
+          }
+        ],
+        "noise": {
+          "distribution": "normal",
+          "std": 0.25
+        }
+      },
+      "constraints": {
+        "min_segment_len": 2,
+        "jump": 1
+      },
+      "stopping": {
+        "n_bkps": 1
+      },
+      "enabled_detectors": [
+        "pelt",
+        "binseg"
+      ],
+      "enabled_models": [
+        "l2",
+        "normal"
+      ],
+      "tolerance": {
+        "index": 2
+      },
+      "profile_tags": [
+        "full"
+      ]
+    },
+    {
+      "id": "step_05",
+      "category": "synthetic_step",
+      "source": "synthetic",
+      "expected_behavior": "detect 1 dominant mean-shift breakpoints under moderate noise",
+      "signal_spec": {
+        "kind": "piecewise_constant",
+        "seed": 1104,
+        "segments": [
+          {
+            "length": 25,
+            "mean": -1.0
+          },
+          {
+            "length": 35,
+            "mean": 1.5
+          }
+        ],
+        "noise": {
+          "distribution": "normal",
+          "std": 0.35
+        }
+      },
+      "constraints": {
+        "min_segment_len": 2,
+        "jump": 1
+      },
+      "stopping": {
+        "n_bkps": 1
+      },
+      "enabled_detectors": [
+        "pelt",
+        "binseg"
+      ],
+      "enabled_models": [
+        "l2",
+        "normal"
+      ],
+      "tolerance": {
+        "index": 2
+      },
+      "profile_tags": [
+        "full"
+      ]
+    },
+    {
+      "id": "step_06",
+      "category": "synthetic_step",
+      "source": "synthetic",
+      "expected_behavior": "detect 1 dominant mean-shift breakpoints under moderate noise",
+      "signal_spec": {
+        "kind": "piecewise_constant",
+        "seed": 1105,
+        "segments": [
+          {
+            "length": 35,
+            "mean": 2.0
+          },
+          {
+            "length": 25,
+            "mean": -1.5
+          }
+        ],
+        "noise": {
+          "distribution": "normal",
+          "std": 0.2
+        }
+      },
+      "constraints": {
+        "min_segment_len": 2,
+        "jump": 1
+      },
+      "stopping": {
+        "n_bkps": 1
+      },
+      "enabled_detectors": [
+        "pelt",
+        "binseg"
+      ],
+      "enabled_models": [
+        "l2",
+        "normal"
+      ],
+      "tolerance": {
+        "index": 2
+      },
+      "profile_tags": [
+        "full"
+      ]
+    },
+    {
+      "id": "step_07",
+      "category": "synthetic_step",
+      "source": "synthetic",
+      "expected_behavior": "detect 3 dominant mean-shift breakpoints under moderate noise",
+      "signal_spec": {
+        "kind": "piecewise_constant",
+        "seed": 1106,
+        "segments": [
+          {
+            "length": 20,
+            "mean": 0.0
+          },
+          {
+            "length": 20,
+            "mean": 3.5
+          },
+          {
+            "length": 20,
+            "mean": -2.0
+          },
+          {
+            "length": 20,
+            "mean": 1.0
+          }
+        ],
+        "noise": {
+          "distribution": "normal",
+          "std": 0.35
+        }
+      },
+      "constraints": {
+        "min_segment_len": 2,
+        "jump": 1
+      },
+      "stopping": {
+        "n_bkps": 3
+      },
+      "enabled_detectors": [
+        "pelt",
+        "binseg"
+      ],
+      "enabled_models": [
+        "l2",
+        "normal"
+      ],
+      "tolerance": {
+        "index": 2
+      },
+      "profile_tags": [
+        "smoke",
+        "full"
+      ]
+    },
+    {
+      "id": "step_08",
+      "category": "synthetic_step",
+      "source": "synthetic",
+      "expected_behavior": "detect 3 dominant mean-shift breakpoints under moderate noise",
+      "signal_spec": {
+        "kind": "piecewise_constant",
+        "seed": 1107,
+        "segments": [
+          {
+            "length": 20,
+            "mean": 1.0
+          },
+          {
+            "length": 20,
+            "mean": -1.5
+          },
+          {
+            "length": 20,
+            "mean": 2.5
+          },
+          {
+            "length": 20,
+            "mean": -0.5
+          }
+        ],
+        "noise": {
+          "distribution": "normal",
+          "std": 0.45
+        }
+      },
+      "constraints": {
+        "min_segment_len": 2,
+        "jump": 1
+      },
+      "stopping": {
+        "n_bkps": 3
+      },
+      "enabled_detectors": [
+        "pelt",
+        "binseg"
+      ],
+      "enabled_models": [
+        "l2",
+        "normal"
+      ],
+      "tolerance": {
+        "index": 2
+      },
+      "profile_tags": [
+        "full"
+      ]
+    },
+    {
+      "id": "step_09",
+      "category": "synthetic_step",
+      "source": "synthetic",
+      "expected_behavior": "detect 3 dominant mean-shift breakpoints under moderate noise",
+      "signal_spec": {
+        "kind": "piecewise_constant",
+        "seed": 1108,
+        "segments": [
+          {
+            "length": 15,
+            "mean": -2.0
+          },
+          {
+            "length": 25,
+            "mean": 1.0
+          },
+          {
+            "length": 20,
+            "mean": 3.0
+          },
+          {
+            "length": 20,
+            "mean": -1.0
+          }
+        ],
+        "noise": {
+          "distribution": "normal",
+          "std": 0.3
+        }
+      },
+      "constraints": {
+        "min_segment_len": 2,
+        "jump": 1
+      },
+      "stopping": {
+        "n_bkps": 3
+      },
+      "enabled_detectors": [
+        "pelt",
+        "binseg"
+      ],
+      "enabled_models": [
+        "l2",
+        "normal"
+      ],
+      "tolerance": {
+        "index": 2
+      },
+      "profile_tags": [
+        "full"
+      ]
+    },
+    {
+      "id": "step_10",
+      "category": "synthetic_step",
+      "source": "synthetic",
+      "expected_behavior": "detect 3 dominant mean-shift breakpoints under moderate noise",
+      "signal_spec": {
+        "kind": "piecewise_constant",
+        "seed": 1109,
+        "segments": [
+          {
+            "length": 25,
+            "mean": 0.0
+          },
+          {
+            "length": 15,
+            "mean": 2.0
+          },
+          {
+            "length": 20,
+            "mean": -2.5
+          },
+          {
+            "length": 20,
+            "mean": 1.5
+          }
+        ],
+        "noise": {
+          "distribution": "normal",
+          "std": 0.4
+        }
+      },
+      "constraints": {
+        "min_segment_len": 2,
+        "jump": 1
+      },
+      "stopping": {
+        "n_bkps": 3
+      },
+      "enabled_detectors": [
+        "pelt",
+        "binseg"
+      ],
+      "enabled_models": [
+        "l2",
+        "normal"
+      ],
+      "tolerance": {
+        "index": 2
+      },
+      "profile_tags": [
+        "full"
+      ]
+    },
+    {
+      "id": "step_11",
+      "category": "synthetic_step",
+      "source": "synthetic",
+      "expected_behavior": "detect 3 dominant mean-shift breakpoints under moderate noise",
+      "signal_spec": {
+        "kind": "piecewise_constant",
+        "seed": 1110,
+        "segments": [
+          {
+            "length": 18,
+            "mean": -1.0
+          },
+          {
+            "length": 22,
+            "mean": 2.2
+          },
+          {
+            "length": 20,
+            "mean": -1.8
+          },
+          {
+            "length": 20,
+            "mean": 2.5
+          }
+        ],
+        "noise": {
+          "distribution": "normal",
+          "std": 0.35
+        }
+      },
+      "constraints": {
+        "min_segment_len": 2,
+        "jump": 1
+      },
+      "stopping": {
+        "n_bkps": 3
+      },
+      "enabled_detectors": [
+        "pelt",
+        "binseg"
+      ],
+      "enabled_models": [
+        "l2",
+        "normal"
+      ],
+      "tolerance": {
+        "index": 2
+      },
+      "profile_tags": [
+        "full"
+      ]
+    },
+    {
+      "id": "step_12",
+      "category": "synthetic_step",
+      "source": "synthetic",
+      "expected_behavior": "detect 3 dominant mean-shift breakpoints under moderate noise",
+      "signal_spec": {
+        "kind": "piecewise_constant",
+        "seed": 1111,
+        "segments": [
+          {
+            "length": 22,
+            "mean": 2.5
+          },
+          {
+            "length": 18,
+            "mean": -1.2
+          },
+          {
+            "length": 20,
+            "mean": 1.8
+          },
+          {
+            "length": 20,
+            "mean": -2.0
+          }
+        ],
+        "noise": {
+          "distribution": "normal",
+          "std": 0.35
+        }
+      },
+      "constraints": {
+        "min_segment_len": 2,
+        "jump": 1
+      },
+      "stopping": {
+        "n_bkps": 3
+      },
+      "enabled_detectors": [
+        "pelt",
+        "binseg"
+      ],
+      "enabled_models": [
+        "l2",
+        "normal"
+      ],
+      "tolerance": {
+        "index": 2
+      },
+      "profile_tags": [
+        "full"
+      ]
+    },
+    {
+      "id": "step_13",
+      "category": "synthetic_step",
+      "source": "synthetic",
+      "expected_behavior": "detect 10 dominant mean-shift breakpoints under moderate noise",
+      "signal_spec": {
+        "kind": "piecewise_constant",
+        "seed": 1112,
+        "segments": [
+          {
+            "length": 10,
+            "mean": 0.0
+          },
+          {
+            "length": 10,
+            "mean": 1.8
+          },
+          {
+            "length": 10,
+            "mean": -1.2
+          },
+          {
+            "length": 10,
+            "mean": 2.0
+          },
+          {
+            "length": 10,
+            "mean": -1.5
+          },
+          {
+            "length": 10,
+            "mean": 1.0
+          },
+          {
+            "length": 10,
+            "mean": -0.8
+          },
+          {
+            "length": 10,
+            "mean": 1.6
+          },
+          {
+            "length": 10,
+            "mean": -1.3
+          },
+          {
+            "length": 10,
+            "mean": 1.2
+          },
+          {
+            "length": 10,
+            "mean": -0.4
+          }
+        ],
+        "noise": {
+          "distribution": "normal",
+          "std": 0.25
+        }
+      },
+      "constraints": {
+        "min_segment_len": 5,
+        "jump": 1
+      },
+      "stopping": {
+        "n_bkps": 10
+      },
+      "enabled_detectors": [
+        "pelt",
+        "binseg"
+      ],
+      "enabled_models": [
+        "l2",
+        "normal"
+      ],
+      "tolerance": {
+        "index": 2
+      },
+      "profile_tags": [
+        "smoke",
+        "full"
+      ]
+    },
+    {
+      "id": "step_14",
+      "category": "synthetic_step",
+      "source": "synthetic",
+      "expected_behavior": "detect 10 dominant mean-shift breakpoints under moderate noise",
+      "signal_spec": {
+        "kind": "piecewise_constant",
+        "seed": 1113,
+        "segments": [
+          {
+            "length": 10,
+            "mean": 1.0
+          },
+          {
+            "length": 10,
+            "mean": -1.8
+          },
+          {
+            "length": 10,
+            "mean": 1.4
+          },
+          {
+            "length": 10,
+            "mean": -1.2
+          },
+          {
+            "length": 10,
+            "mean": 1.1
+          },
+          {
+            "length": 10,
+            "mean": -0.9
+          },
+          {
+            "length": 10,
+            "mean": 1.7
+          },
+          {
+            "length": 10,
+            "mean": -1.4
+          },
+          {
+            "length": 10,
+            "mean": 1.3
+          },
+          {
+            "length": 10,
+            "mean": -1.0
+          },
+          {
+            "length": 10,
+            "mean": 0.5
+          }
+        ],
+        "noise": {
+          "distribution": "normal",
+          "std": 0.3
+        }
+      },
+      "constraints": {
+        "min_segment_len": 5,
+        "jump": 1
+      },
+      "stopping": {
+        "n_bkps": 10
+      },
+      "enabled_detectors": [
+        "pelt",
+        "binseg"
+      ],
+      "enabled_models": [
+        "l2",
+        "normal"
+      ],
+      "tolerance": {
+        "index": 2
+      },
+      "profile_tags": [
+        "full"
+      ]
+    },
+    {
+      "id": "step_15",
+      "category": "synthetic_step",
+      "source": "synthetic",
+      "expected_behavior": "detect 10 dominant mean-shift breakpoints under moderate noise",
+      "signal_spec": {
+        "kind": "piecewise_constant",
+        "seed": 1114,
+        "segments": [
+          {
+            "length": 10,
+            "mean": -0.5
+          },
+          {
+            "length": 10,
+            "mean": 1.5
+          },
+          {
+            "length": 10,
+            "mean": -1.0
+          },
+          {
+            "length": 10,
+            "mean": 1.8
+          },
+          {
+            "length": 10,
+            "mean": -1.2
+          },
+          {
+            "length": 10,
+            "mean": 1.1
+          },
+          {
+            "length": 10,
+            "mean": -0.7
+          },
+          {
+            "length": 10,
+            "mean": 1.4
+          },
+          {
+            "length": 10,
+            "mean": -1.1
+          },
+          {
+            "length": 10,
+            "mean": 1.0
+          },
+          {
+            "length": 10,
+            "mean": -0.2
+          }
+        ],
+        "noise": {
+          "distribution": "normal",
+          "std": 0.35
+        }
+      },
+      "constraints": {
+        "min_segment_len": 5,
+        "jump": 1
+      },
+      "stopping": {
+        "n_bkps": 10
+      },
+      "enabled_detectors": [
+        "pelt",
+        "binseg"
+      ],
+      "enabled_models": [
+        "l2",
+        "normal"
+      ],
+      "tolerance": {
+        "index": 2
+      },
+      "profile_tags": [
+        "full"
+      ]
+    },
+    {
+      "id": "step_16",
+      "category": "synthetic_step",
+      "source": "synthetic",
+      "expected_behavior": "detect 10 dominant mean-shift breakpoints under moderate noise",
+      "signal_spec": {
+        "kind": "piecewise_constant",
+        "seed": 1115,
+        "segments": [
+          {
+            "length": 10,
+            "mean": 0.2
+          },
+          {
+            "length": 10,
+            "mean": 1.2
+          },
+          {
+            "length": 10,
+            "mean": -1.4
+          },
+          {
+            "length": 10,
+            "mean": 1.9
+          },
+          {
+            "length": 10,
+            "mean": -1.1
+          },
+          {
+            "length": 10,
+            "mean": 1.3
+          },
+          {
+            "length": 10,
+            "mean": -0.9
+          },
+          {
+            "length": 10,
+            "mean": 1.5
+          },
+          {
+            "length": 10,
+            "mean": -1.0
+          },
+          {
+            "length": 10,
+            "mean": 1.1
+          },
+          {
+            "length": 10,
+            "mean": -0.3
+          }
+        ],
+        "noise": {
+          "distribution": "normal",
+          "std": 0.4
+        }
+      },
+      "constraints": {
+        "min_segment_len": 5,
+        "jump": 1
+      },
+      "stopping": {
+        "n_bkps": 10
+      },
+      "enabled_detectors": [
+        "pelt",
+        "binseg"
+      ],
+      "enabled_models": [
+        "l2",
+        "normal"
+      ],
+      "tolerance": {
+        "index": 2
+      },
+      "profile_tags": [
+        "full"
+      ]
+    },
+    {
+      "id": "step_17",
+      "category": "synthetic_step",
+      "source": "synthetic",
+      "expected_behavior": "detect 10 dominant mean-shift breakpoints under moderate noise",
+      "signal_spec": {
+        "kind": "piecewise_constant",
+        "seed": 1116,
+        "segments": [
+          {
+            "length": 10,
+            "mean": 0.0
+          },
+          {
+            "length": 10,
+            "mean": 2.0
+          },
+          {
+            "length": 10,
+            "mean": -1.6
+          },
+          {
+            "length": 10,
+            "mean": 2.2
+          },
+          {
+            "length": 10,
+            "mean": -1.8
+          },
+          {
+            "length": 10,
+            "mean": 1.4
+          },
+          {
+            "length": 10,
+            "mean": -1.0
+          },
+          {
+            "length": 10,
+            "mean": 1.8
+          },
+          {
+            "length": 10,
+            "mean": -1.4
+          },
+          {
+            "length": 10,
+            "mean": 1.3
+          },
+          {
+            "length": 10,
+            "mean": -0.6
+          }
+        ],
+        "noise": {
+          "distribution": "normal",
+          "std": 0.3
+        }
+      },
+      "constraints": {
+        "min_segment_len": 5,
+        "jump": 1
+      },
+      "stopping": {
+        "n_bkps": 10
+      },
+      "enabled_detectors": [
+        "pelt",
+        "binseg"
+      ],
+      "enabled_models": [
+        "l2",
+        "normal"
+      ],
+      "tolerance": {
+        "index": 2
+      },
+      "profile_tags": [
+        "full"
+      ]
+    },
+    {
+      "id": "step_18",
+      "category": "synthetic_step",
+      "source": "synthetic",
+      "expected_behavior": "detect 10 dominant mean-shift breakpoints under moderate noise",
+      "signal_spec": {
+        "kind": "piecewise_constant",
+        "seed": 1117,
+        "segments": [
+          {
+            "length": 10,
+            "mean": 1.5
+          },
+          {
+            "length": 10,
+            "mean": -1.0
+          },
+          {
+            "length": 10,
+            "mean": 1.8
+          },
+          {
+            "length": 10,
+            "mean": -1.3
+          },
+          {
+            "length": 10,
+            "mean": 1.6
+          },
+          {
+            "length": 10,
+            "mean": -1.1
+          },
+          {
+            "length": 10,
+            "mean": 1.4
+          },
+          {
+            "length": 10,
+            "mean": -0.9
+          },
+          {
+            "length": 10,
+            "mean": 1.2
+          },
+          {
+            "length": 10,
+            "mean": -0.7
+          },
+          {
+            "length": 10,
+            "mean": 0.2
+          }
+        ],
+        "noise": {
+          "distribution": "normal",
+          "std": 0.35
+        }
+      },
+      "constraints": {
+        "min_segment_len": 5,
+        "jump": 1
+      },
+      "stopping": {
+        "n_bkps": 10
+      },
+      "enabled_detectors": [
+        "pelt",
+        "binseg"
+      ],
+      "enabled_models": [
+        "l2",
+        "normal"
+      ],
+      "tolerance": {
+        "index": 2
+      },
+      "profile_tags": [
+        "full"
+      ]
+    },
+    {
+      "id": "vol_01",
+      "category": "synthetic_volatility",
+      "source": "synthetic",
+      "expected_behavior": "detect two variance-regime transitions with stable mean",
+      "signal_spec": {
+        "kind": "volatility_shift",
+        "seed": 2118,
+        "segments": [
+          {
+            "length": 30,
+            "mean": 0.0,
+            "std": 0.2
+          },
+          {
+            "length": 30,
+            "mean": 0.0,
+            "std": 1.0
+          },
+          {
+            "length": 30,
+            "mean": 0.0,
+            "std": 0.3
+          }
+        ]
+      },
+      "constraints": {
+        "min_segment_len": 4,
+        "jump": 1
+      },
+      "stopping": {
+        "n_bkps": 2
+      },
+      "enabled_detectors": [
+        "pelt",
+        "binseg"
+      ],
+      "enabled_models": [
+        "l2",
+        "normal"
+      ],
+      "tolerance": {
+        "index": 2
+      },
+      "profile_tags": [
+        "smoke",
+        "full"
+      ]
+    },
+    {
+      "id": "vol_02",
+      "category": "synthetic_volatility",
+      "source": "synthetic",
+      "expected_behavior": "detect two variance-regime transitions with stable mean",
+      "signal_spec": {
+        "kind": "volatility_shift",
+        "seed": 2119,
+        "segments": [
+          {
+            "length": 30,
+            "mean": 0.2,
+            "std": 0.3
+          },
+          {
+            "length": 30,
+            "mean": 0.2,
+            "std": 1.2
+          },
+          {
+            "length": 30,
+            "mean": 0.2,
+            "std": 0.4
+          }
+        ]
+      },
+      "constraints": {
+        "min_segment_len": 4,
+        "jump": 1
+      },
+      "stopping": {
+        "n_bkps": 2
+      },
+      "enabled_detectors": [
+        "pelt",
+        "binseg"
+      ],
+      "enabled_models": [
+        "l2",
+        "normal"
+      ],
+      "tolerance": {
+        "index": 2
+      },
+      "profile_tags": [
+        "smoke",
+        "full"
+      ]
+    },
+    {
+      "id": "vol_03",
+      "category": "synthetic_volatility",
+      "source": "synthetic",
+      "expected_behavior": "detect two variance-regime transitions with stable mean",
+      "signal_spec": {
+        "kind": "volatility_shift",
+        "seed": 2120,
+        "segments": [
+          {
+            "length": 20,
+            "mean": 0.0,
+            "std": 0.15
+          },
+          {
+            "length": 40,
+            "mean": 0.0,
+            "std": 0.9
+          },
+          {
+            "length": 30,
+            "mean": 0.0,
+            "std": 0.25
+          }
+        ]
+      },
+      "constraints": {
+        "min_segment_len": 4,
+        "jump": 1
+      },
+      "stopping": {
+        "n_bkps": 2
+      },
+      "enabled_detectors": [
+        "pelt",
+        "binseg"
+      ],
+      "enabled_models": [
+        "l2",
+        "normal"
+      ],
+      "tolerance": {
+        "index": 2
+      },
+      "profile_tags": [
+        "full"
+      ]
+    },
+    {
+      "id": "vol_04",
+      "category": "synthetic_volatility",
+      "source": "synthetic",
+      "expected_behavior": "detect two variance-regime transitions with stable mean",
+      "signal_spec": {
+        "kind": "volatility_shift",
+        "seed": 2121,
+        "segments": [
+          {
+            "length": 25,
+            "mean": 0.1,
+            "std": 0.25
+          },
+          {
+            "length": 35,
+            "mean": -0.1,
+            "std": 1.1
+          },
+          {
+            "length": 30,
+            "mean": 0.1,
+            "std": 0.35
+          }
+        ]
+      },
+      "constraints": {
+        "min_segment_len": 4,
+        "jump": 1
+      },
+      "stopping": {
+        "n_bkps": 2
+      },
+      "enabled_detectors": [
+        "pelt",
+        "binseg"
+      ],
+      "enabled_models": [
+        "l2",
+        "normal"
+      ],
+      "tolerance": {
+        "index": 2
+      },
+      "profile_tags": [
+        "full"
+      ]
+    },
+    {
+      "id": "vol_05",
+      "category": "synthetic_volatility",
+      "source": "synthetic",
+      "expected_behavior": "detect two variance-regime transitions with stable mean",
+      "signal_spec": {
+        "kind": "volatility_shift",
+        "seed": 2122,
+        "segments": [
+          {
+            "length": 35,
+            "mean": 0.0,
+            "std": 0.2
+          },
+          {
+            "length": 25,
+            "mean": 0.0,
+            "std": 0.8
+          },
+          {
+            "length": 30,
+            "mean": 0.0,
+            "std": 0.3
+          }
+        ]
+      },
+      "constraints": {
+        "min_segment_len": 4,
+        "jump": 1
+      },
+      "stopping": {
+        "n_bkps": 2
+      },
+      "enabled_detectors": [
+        "pelt",
+        "binseg"
+      ],
+      "enabled_models": [
+        "l2",
+        "normal"
+      ],
+      "tolerance": {
+        "index": 2
+      },
+      "profile_tags": [
+        "full"
+      ]
+    },
+    {
+      "id": "vol_06",
+      "category": "synthetic_volatility",
+      "source": "synthetic",
+      "expected_behavior": "detect two variance-regime transitions with stable mean",
+      "signal_spec": {
+        "kind": "volatility_shift",
+        "seed": 2123,
+        "segments": [
+          {
+            "length": 30,
+            "mean": 0.0,
+            "std": 0.22
+          },
+          {
+            "length": 20,
+            "mean": 0.0,
+            "std": 1.0
+          },
+          {
+            "length": 40,
+            "mean": 0.0,
+            "std": 0.28
+          }
+        ]
+      },
+      "constraints": {
+        "min_segment_len": 4,
+        "jump": 1
+      },
+      "stopping": {
+        "n_bkps": 2
+      },
+      "enabled_detectors": [
+        "pelt",
+        "binseg"
+      ],
+      "enabled_models": [
+        "l2",
+        "normal"
+      ],
+      "tolerance": {
+        "index": 2
+      },
+      "profile_tags": [
+        "full"
+      ]
+    },
+    {
+      "id": "vol_07",
+      "category": "synthetic_volatility",
+      "source": "synthetic",
+      "expected_behavior": "detect two variance-regime transitions with stable mean",
+      "signal_spec": {
+        "kind": "volatility_shift",
+        "seed": 2124,
+        "segments": [
+          {
+            "length": 30,
+            "mean": 0.0,
+            "std": 0.18
+          },
+          {
+            "length": 30,
+            "mean": 0.0,
+            "std": 0.95
+          },
+          {
+            "length": 20,
+            "mean": 0.0,
+            "std": 0.24
+          }
+        ]
+      },
+      "constraints": {
+        "min_segment_len": 4,
+        "jump": 1
+      },
+      "stopping": {
+        "n_bkps": 2
+      },
+      "enabled_detectors": [
+        "pelt",
+        "binseg"
+      ],
+      "enabled_models": [
+        "l2",
+        "normal"
+      ],
+      "tolerance": {
+        "index": 2
+      },
+      "profile_tags": [
+        "full"
+      ]
+    },
+    {
+      "id": "vol_08",
+      "category": "synthetic_volatility",
+      "source": "synthetic",
+      "expected_behavior": "detect two variance-regime transitions with stable mean",
+      "signal_spec": {
+        "kind": "volatility_shift",
+        "seed": 2125,
+        "segments": [
+          {
+            "length": 20,
+            "mean": 0.1,
+            "std": 0.2
+          },
+          {
+            "length": 30,
+            "mean": 0.1,
+            "std": 1.05
+          },
+          {
+            "length": 30,
+            "mean": 0.1,
+            "std": 0.3
+          }
+        ]
+      },
+      "constraints": {
+        "min_segment_len": 4,
+        "jump": 1
+      },
+      "stopping": {
+        "n_bkps": 2
+      },
+      "enabled_detectors": [
+        "pelt",
+        "binseg"
+      ],
+      "enabled_models": [
+        "l2",
+        "normal"
+      ],
+      "tolerance": {
+        "index": 2
+      },
+      "profile_tags": [
+        "full"
+      ]
+    },
+    {
+      "id": "heavy_01",
+      "category": "heavy_tailed",
+      "source": "synthetic",
+      "expected_behavior": "detect robust mean-shift breakpoints under heavy tails and sparse outliers",
+      "signal_spec": {
+        "kind": "piecewise_constant",
+        "seed": 3126,
+        "segments": [
+          {
+            "length": 30,
+            "mean": 0.0
+          },
+          {
+            "length": 30,
+            "mean": 3.0
+          },
+          {
+            "length": 30,
+            "mean": -1.0
+          }
+        ],
+        "noise": {
+          "distribution": "student_t",
+          "std": 0.45,
+          "df": 3,
+          "outlier_fraction": 0.02,
+          "outlier_scale": 8.0
+        }
+      },
+      "constraints": {
+        "min_segment_len": 4,
+        "jump": 1
+      },
+      "stopping": {
+        "n_bkps": 2
+      },
+      "enabled_detectors": [
+        "pelt",
+        "binseg"
+      ],
+      "enabled_models": [
+        "l2"
+      ],
+      "tolerance": {
+        "index": 2
+      },
+      "profile_tags": [
+        "smoke",
+        "full"
+      ]
+    },
+    {
+      "id": "heavy_02",
+      "category": "heavy_tailed",
+      "source": "synthetic",
+      "expected_behavior": "detect robust mean-shift breakpoints under heavy tails and sparse outliers",
+      "signal_spec": {
+        "kind": "piecewise_constant",
+        "seed": 3127,
+        "segments": [
+          {
+            "length": 30,
+            "mean": -1.0
+          },
+          {
+            "length": 30,
+            "mean": 2.5
+          },
+          {
+            "length": 30,
+            "mean": -2.0
+          }
+        ],
+        "noise": {
+          "distribution": "student_t",
+          "std": 0.5,
+          "df": 4,
+          "outlier_fraction": 0.03,
+          "outlier_scale": 7.0
+        }
+      },
+      "constraints": {
+        "min_segment_len": 4,
+        "jump": 1
+      },
+      "stopping": {
+        "n_bkps": 2
+      },
+      "enabled_detectors": [
+        "pelt",
+        "binseg"
+      ],
+      "enabled_models": [
+        "l2"
+      ],
+      "tolerance": {
+        "index": 2
+      },
+      "profile_tags": [
+        "full"
+      ]
+    },
+    {
+      "id": "heavy_03",
+      "category": "heavy_tailed",
+      "source": "synthetic",
+      "expected_behavior": "detect robust mean-shift breakpoints under heavy tails and sparse outliers",
+      "signal_spec": {
+        "kind": "piecewise_constant",
+        "seed": 3128,
+        "segments": [
+          {
+            "length": 25,
+            "mean": 0.5
+          },
+          {
+            "length": 35,
+            "mean": 2.8
+          },
+          {
+            "length": 30,
+            "mean": -1.5
+          }
+        ],
+        "noise": {
+          "distribution": "student_t",
+          "std": 0.4,
+          "df": 3,
+          "outlier_fraction": 0.04,
+          "outlier_scale": 9.0
+        }
+      },
+      "constraints": {
+        "min_segment_len": 4,
+        "jump": 1
+      },
+      "stopping": {
+        "n_bkps": 2
+      },
+      "enabled_detectors": [
+        "pelt",
+        "binseg"
+      ],
+      "enabled_models": [
+        "l2"
+      ],
+      "tolerance": {
+        "index": 2
+      },
+      "profile_tags": [
+        "full"
+      ]
+    },
+    {
+      "id": "heavy_04",
+      "category": "heavy_tailed",
+      "source": "synthetic",
+      "expected_behavior": "detect robust mean-shift breakpoints under heavy tails and sparse outliers",
+      "signal_spec": {
+        "kind": "piecewise_constant",
+        "seed": 3129,
+        "segments": [
+          {
+            "length": 35,
+            "mean": -0.5
+          },
+          {
+            "length": 25,
+            "mean": 2.2
+          },
+          {
+            "length": 30,
+            "mean": -1.8
+          }
+        ],
+        "noise": {
+          "distribution": "student_t",
+          "std": 0.5,
+          "df": 5,
+          "outlier_fraction": 0.02,
+          "outlier_scale": 8.5
+        }
+      },
+      "constraints": {
+        "min_segment_len": 4,
+        "jump": 1
+      },
+      "stopping": {
+        "n_bkps": 2
+      },
+      "enabled_detectors": [
+        "pelt",
+        "binseg"
+      ],
+      "enabled_models": [
+        "l2"
+      ],
+      "tolerance": {
+        "index": 2
+      },
+      "profile_tags": [
+        "full"
+      ]
+    },
+    {
+      "id": "heavy_05",
+      "category": "heavy_tailed",
+      "source": "synthetic",
+      "expected_behavior": "detect robust mean-shift breakpoints under heavy tails and sparse outliers",
+      "signal_spec": {
+        "kind": "piecewise_constant",
+        "seed": 3130,
+        "segments": [
+          {
+            "length": 30,
+            "mean": 0.0
+          },
+          {
+            "length": 20,
+            "mean": 2.0
+          },
+          {
+            "length": 40,
+            "mean": -1.2
+          }
+        ],
+        "noise": {
+          "distribution": "student_t",
+          "std": 0.45,
+          "df": 4,
+          "outlier_fraction": 0.03,
+          "outlier_scale": 7.5
+        }
+      },
+      "constraints": {
+        "min_segment_len": 4,
+        "jump": 1
+      },
+      "stopping": {
+        "n_bkps": 2
+      },
+      "enabled_detectors": [
+        "pelt",
+        "binseg"
+      ],
+      "enabled_models": [
+        "l2"
+      ],
+      "tolerance": {
+        "index": 2
+      },
+      "profile_tags": [
+        "full"
+      ]
+    },
+    {
+      "id": "heavy_06",
+      "category": "heavy_tailed",
+      "source": "synthetic",
+      "expected_behavior": "detect robust mean-shift breakpoints under heavy tails and sparse outliers",
+      "signal_spec": {
+        "kind": "piecewise_constant",
+        "seed": 3131,
+        "segments": [
+          {
+            "length": 20,
+            "mean": -0.2
+          },
+          {
+            "length": 30,
+            "mean": 2.6
+          },
+          {
+            "length": 30,
+            "mean": -1.0
+          }
+        ],
+        "noise": {
+          "distribution": "student_t",
+          "std": 0.42,
+          "df": 3,
+          "outlier_fraction": 0.02,
+          "outlier_scale": 8.2
+        }
+      },
+      "constraints": {
+        "min_segment_len": 4,
+        "jump": 1
+      },
+      "stopping": {
+        "n_bkps": 2
+      },
+      "enabled_detectors": [
+        "pelt",
+        "binseg"
+      ],
+      "enabled_models": [
+        "l2"
+      ],
+      "tolerance": {
+        "index": 2
+      },
+      "profile_tags": [
+        "full"
+      ]
+    },
+    {
+      "id": "heavy_07",
+      "category": "heavy_tailed",
+      "source": "synthetic",
+      "expected_behavior": "detect robust mean-shift breakpoints under heavy tails and sparse outliers",
+      "signal_spec": {
+        "kind": "piecewise_constant",
+        "seed": 3132,
+        "segments": [
+          {
+            "length": 30,
+            "mean": 0.1
+          },
+          {
+            "length": 30,
+            "mean": 2.9
+          },
+          {
+            "length": 20,
+            "mean": -1.4
+          }
+        ],
+        "noise": {
+          "distribution": "student_t",
+          "std": 0.48,
+          "df": 4,
+          "outlier_fraction": 0.03,
+          "outlier_scale": 8.8
+        }
+      },
+      "constraints": {
+        "min_segment_len": 4,
+        "jump": 1
+      },
+      "stopping": {
+        "n_bkps": 2
+      },
+      "enabled_detectors": [
+        "pelt",
+        "binseg"
+      ],
+      "enabled_models": [
+        "l2"
+      ],
+      "tolerance": {
+        "index": 2
+      },
+      "profile_tags": [
+        "full"
+      ]
+    },
+    {
+      "id": "heavy_08",
+      "category": "heavy_tailed",
+      "source": "synthetic",
+      "expected_behavior": "detect robust mean-shift breakpoints under heavy tails and sparse outliers",
+      "signal_spec": {
+        "kind": "piecewise_constant",
+        "seed": 3133,
+        "segments": [
+          {
+            "length": 25,
+            "mean": -0.3
+          },
+          {
+            "length": 25,
+            "mean": 2.4
+          },
+          {
+            "length": 30,
+            "mean": -1.6
+          }
+        ],
+        "noise": {
+          "distribution": "student_t",
+          "std": 0.46,
+          "df": 3,
+          "outlier_fraction": 0.04,
+          "outlier_scale": 7.8
+        }
+      },
+      "constraints": {
+        "min_segment_len": 4,
+        "jump": 1
+      },
+      "stopping": {
+        "n_bkps": 2
+      },
+      "enabled_detectors": [
+        "pelt",
+        "binseg"
+      ],
+      "enabled_models": [
+        "l2"
+      ],
+      "tolerance": {
+        "index": 2
+      },
+      "profile_tags": [
+        "full"
+      ]
+    },
+    {
+      "id": "ar_01",
+      "category": "autocorrelated",
+      "source": "synthetic",
+      "expected_behavior": "detect mean shifts despite AR(1) correlation",
+      "signal_spec": {
+        "kind": "ar1_piecewise_mean",
+        "seed": 4134,
+        "phi": 0.35,
+        "sigma": 0.7,
+        "segments": [
+          {
+            "length": 40,
+            "mean": -1.0
+          },
+          {
+            "length": 40,
+            "mean": 2.0
+          },
+          {
+            "length": 40,
+            "mean": -0.5
+          }
+        ]
+      },
+      "constraints": {
+        "min_segment_len": 6,
+        "jump": 1
+      },
+      "stopping": {
+        "n_bkps": 2
+      },
+      "enabled_detectors": [
+        "pelt",
+        "binseg"
+      ],
+      "enabled_models": [
+        "l2",
+        "normal"
+      ],
+      "tolerance": {
+        "index": 2
+      },
+      "profile_tags": [
+        "smoke",
+        "full"
+      ]
+    },
+    {
+      "id": "ar_02",
+      "category": "autocorrelated",
+      "source": "synthetic",
+      "expected_behavior": "detect mean shifts despite AR(1) correlation",
+      "signal_spec": {
+        "kind": "ar1_piecewise_mean",
+        "seed": 4135,
+        "phi": 0.4,
+        "sigma": 0.65,
+        "segments": [
+          {
+            "length": 35,
+            "mean": 0.0
+          },
+          {
+            "length": 45,
+            "mean": 2.5
+          },
+          {
+            "length": 40,
+            "mean": -1.0
+          }
+        ]
+      },
+      "constraints": {
+        "min_segment_len": 6,
+        "jump": 1
+      },
+      "stopping": {
+        "n_bkps": 2
+      },
+      "enabled_detectors": [
+        "pelt",
+        "binseg"
+      ],
+      "enabled_models": [
+        "l2",
+        "normal"
+      ],
+      "tolerance": {
+        "index": 2
+      },
+      "profile_tags": [
+        "smoke",
+        "full"
+      ]
+    },
+    {
+      "id": "ar_03",
+      "category": "autocorrelated",
+      "source": "synthetic",
+      "expected_behavior": "detect mean shifts despite AR(1) correlation",
+      "signal_spec": {
+        "kind": "ar1_piecewise_mean",
+        "seed": 4136,
+        "phi": 0.45,
+        "sigma": 0.6,
+        "segments": [
+          {
+            "length": 30,
+            "mean": -0.5
+          },
+          {
+            "length": 40,
+            "mean": 1.8
+          },
+          {
+            "length": 50,
+            "mean": -1.2
+          }
+        ]
+      },
+      "constraints": {
+        "min_segment_len": 6,
+        "jump": 1
+      },
+      "stopping": {
+        "n_bkps": 2
+      },
+      "enabled_detectors": [
+        "pelt",
+        "binseg"
+      ],
+      "enabled_models": [
+        "l2",
+        "normal"
+      ],
+      "tolerance": {
+        "index": 2
+      },
+      "profile_tags": [
+        "full"
+      ]
+    },
+    {
+      "id": "ar_04",
+      "category": "autocorrelated",
+      "source": "synthetic",
+      "expected_behavior": "detect mean shifts despite AR(1) correlation",
+      "signal_spec": {
+        "kind": "ar1_piecewise_mean",
+        "seed": 4137,
+        "phi": 0.3,
+        "sigma": 0.7,
+        "segments": [
+          {
+            "length": 50,
+            "mean": 0.5
+          },
+          {
+            "length": 35,
+            "mean": 2.2
+          },
+          {
+            "length": 35,
+            "mean": -0.8
+          }
+        ]
+      },
+      "constraints": {
+        "min_segment_len": 6,
+        "jump": 1
+      },
+      "stopping": {
+        "n_bkps": 2
+      },
+      "enabled_detectors": [
+        "pelt",
+        "binseg"
+      ],
+      "enabled_models": [
+        "l2",
+        "normal"
+      ],
+      "tolerance": {
+        "index": 2
+      },
+      "profile_tags": [
+        "full"
+      ]
+    },
+    {
+      "id": "ar_05",
+      "category": "autocorrelated",
+      "source": "synthetic",
+      "expected_behavior": "detect mean shifts despite AR(1) correlation",
+      "signal_spec": {
+        "kind": "ar1_piecewise_mean",
+        "seed": 4138,
+        "phi": 0.38,
+        "sigma": 0.62,
+        "segments": [
+          {
+            "length": 45,
+            "mean": -1.2
+          },
+          {
+            "length": 40,
+            "mean": 1.5
+          },
+          {
+            "length": 35,
+            "mean": -0.2
+          }
+        ]
+      },
+      "constraints": {
+        "min_segment_len": 6,
+        "jump": 1
+      },
+      "stopping": {
+        "n_bkps": 2
+      },
+      "enabled_detectors": [
+        "pelt",
+        "binseg"
+      ],
+      "enabled_models": [
+        "l2",
+        "normal"
+      ],
+      "tolerance": {
+        "index": 2
+      },
+      "profile_tags": [
+        "full"
+      ]
+    },
+    {
+      "id": "ar_06",
+      "category": "autocorrelated",
+      "source": "synthetic",
+      "expected_behavior": "detect mean shifts despite AR(1) correlation",
+      "signal_spec": {
+        "kind": "ar1_piecewise_mean",
+        "seed": 4139,
+        "phi": 0.42,
+        "sigma": 0.66,
+        "segments": [
+          {
+            "length": 40,
+            "mean": -0.8
+          },
+          {
+            "length": 30,
+            "mean": 1.9
+          },
+          {
+            "length": 50,
+            "mean": -1.1
+          }
+        ]
+      },
+      "constraints": {
+        "min_segment_len": 6,
+        "jump": 1
+      },
+      "stopping": {
+        "n_bkps": 2
+      },
+      "enabled_detectors": [
+        "pelt",
+        "binseg"
+      ],
+      "enabled_models": [
+        "l2",
+        "normal"
+      ],
+      "tolerance": {
+        "index": 2
+      },
+      "profile_tags": [
+        "full"
+      ]
+    },
+    {
+      "id": "trend_01",
+      "category": "trending",
+      "source": "synthetic",
+      "expected_behavior": "detect trend-break boundaries in piecewise linear signal",
+      "signal_spec": {
+        "kind": "piecewise_linear",
+        "seed": 5140,
+        "segments": [
+          {
+            "length": 35,
+            "slope": 0.03,
+            "intercept": 0.0
+          },
+          {
+            "length": 35,
+            "slope": -0.02,
+            "intercept": 2.0
+          },
+          {
+            "length": 35,
+            "slope": 0.04,
+            "intercept": -1.0
+          }
+        ],
+        "noise": {
+          "distribution": "normal",
+          "std": 0.2
+        }
+      },
+      "constraints": {
+        "min_segment_len": 6,
+        "jump": 1
+      },
+      "stopping": {
+        "n_bkps": 2
+      },
+      "enabled_detectors": [
+        "pelt",
+        "binseg"
+      ],
+      "enabled_models": [
+        "l2",
+        "normal"
+      ],
+      "tolerance": {
+        "index": 2
+      },
+      "profile_tags": [
+        "smoke",
+        "full"
+      ]
+    },
+    {
+      "id": "trend_02",
+      "category": "trending",
+      "source": "synthetic",
+      "expected_behavior": "detect trend-break boundaries in piecewise linear signal",
+      "signal_spec": {
+        "kind": "piecewise_linear",
+        "seed": 5141,
+        "segments": [
+          {
+            "length": 30,
+            "slope": 0.02,
+            "intercept": 0.5
+          },
+          {
+            "length": 40,
+            "slope": -0.03,
+            "intercept": 2.5
+          },
+          {
+            "length": 35,
+            "slope": 0.05,
+            "intercept": -0.8
+          }
+        ],
+        "noise": {
+          "distribution": "normal",
+          "std": 0.25
+        }
+      },
+      "constraints": {
+        "min_segment_len": 6,
+        "jump": 1
+      },
+      "stopping": {
+        "n_bkps": 2
+      },
+      "enabled_detectors": [
+        "pelt",
+        "binseg"
+      ],
+      "enabled_models": [
+        "l2",
+        "normal"
+      ],
+      "tolerance": {
+        "index": 2
+      },
+      "profile_tags": [
+        "smoke",
+        "full"
+      ]
+    },
+    {
+      "id": "trend_03",
+      "category": "trending",
+      "source": "synthetic",
+      "expected_behavior": "detect trend-break boundaries in piecewise linear signal",
+      "signal_spec": {
+        "kind": "piecewise_linear",
+        "seed": 5142,
+        "segments": [
+          {
+            "length": 40,
+            "slope": 0.04,
+            "intercept": 0.2
+          },
+          {
+            "length": 30,
+            "slope": -0.01,
+            "intercept": 2.2
+          },
+          {
+            "length": 35,
+            "slope": 0.03,
+            "intercept": -0.6
+          }
+        ],
+        "noise": {
+          "distribution": "normal",
+          "std": 0.2
+        }
+      },
+      "constraints": {
+        "min_segment_len": 6,
+        "jump": 1
+      },
+      "stopping": {
+        "n_bkps": 2
+      },
+      "enabled_detectors": [
+        "pelt",
+        "binseg"
+      ],
+      "enabled_models": [
+        "l2",
+        "normal"
+      ],
+      "tolerance": {
+        "index": 2
+      },
+      "profile_tags": [
+        "full"
+      ]
+    },
+    {
+      "id": "trend_04",
+      "category": "trending",
+      "source": "synthetic",
+      "expected_behavior": "detect trend-break boundaries in piecewise linear signal",
+      "signal_spec": {
+        "kind": "piecewise_linear",
+        "seed": 5143,
+        "segments": [
+          {
+            "length": 35,
+            "slope": 0.01,
+            "intercept": 0.7
+          },
+          {
+            "length": 30,
+            "slope": -0.04,
+            "intercept": 2.8
+          },
+          {
+            "length": 40,
+            "slope": 0.04,
+            "intercept": -1.2
+          }
+        ],
+        "noise": {
+          "distribution": "normal",
+          "std": 0.3
+        }
+      },
+      "constraints": {
+        "min_segment_len": 6,
+        "jump": 1
+      },
+      "stopping": {
+        "n_bkps": 2
+      },
+      "enabled_detectors": [
+        "pelt",
+        "binseg"
+      ],
+      "enabled_models": [
+        "l2",
+        "normal"
+      ],
+      "tolerance": {
+        "index": 2
+      },
+      "profile_tags": [
+        "full"
+      ]
+    },
+    {
+      "id": "trend_05",
+      "category": "trending",
+      "source": "synthetic",
+      "expected_behavior": "detect trend-break boundaries in piecewise linear signal",
+      "signal_spec": {
+        "kind": "piecewise_linear",
+        "seed": 5144,
+        "segments": [
+          {
+            "length": 30,
+            "slope": 0.03,
+            "intercept": 0.0
+          },
+          {
+            "length": 35,
+            "slope": -0.02,
+            "intercept": 2.4
+          },
+          {
+            "length": 40,
+            "slope": 0.02,
+            "intercept": -0.4
+          }
+        ],
+        "noise": {
+          "distribution": "normal",
+          "std": 0.22
+        }
+      },
+      "constraints": {
+        "min_segment_len": 6,
+        "jump": 1
+      },
+      "stopping": {
+        "n_bkps": 2
+      },
+      "enabled_detectors": [
+        "pelt",
+        "binseg"
+      ],
+      "enabled_models": [
+        "l2",
+        "normal"
+      ],
+      "tolerance": {
+        "index": 2
+      },
+      "profile_tags": [
+        "full"
+      ]
+    },
+    {
+      "id": "trend_06",
+      "category": "trending",
+      "source": "synthetic",
+      "expected_behavior": "detect trend-break boundaries in piecewise linear signal",
+      "signal_spec": {
+        "kind": "piecewise_linear",
+        "seed": 5145,
+        "segments": [
+          {
+            "length": 40,
+            "slope": 0.02,
+            "intercept": 0.3
+          },
+          {
+            "length": 35,
+            "slope": -0.03,
+            "intercept": 2.1
+          },
+          {
+            "length": 30,
+            "slope": 0.03,
+            "intercept": -0.9
+          }
+        ],
+        "noise": {
+          "distribution": "normal",
+          "std": 0.24
+        }
+      },
+      "constraints": {
+        "min_segment_len": 6,
+        "jump": 1
+      },
+      "stopping": {
+        "n_bkps": 2
+      },
+      "enabled_detectors": [
+        "pelt",
+        "binseg"
+      ],
+      "enabled_models": [
+        "l2",
+        "normal"
+      ],
+      "tolerance": {
+        "index": 2
+      },
+      "profile_tags": [
+        "full"
+      ]
+    },
+    {
+      "id": "missing_01",
+      "category": "missing_gap",
+      "source": "synthetic",
+      "expected_behavior": "after deterministic fill, recover dominant mean-shift breakpoints",
+      "signal_spec": {
+        "kind": "piecewise_constant",
+        "seed": 6146,
+        "segments": [
+          {
+            "length": 40,
+            "mean": 0.0
+          },
+          {
+            "length": 40,
+            "mean": 3.0
+          },
+          {
+            "length": 40,
+            "mean": -1.5
+          }
+        ],
+        "noise": {
+          "distribution": "normal",
+          "std": 0.3
+        },
+        "missing_gaps": [
+          [
+            10,
+            16
+          ],
+          [
+            70,
+            78
+          ]
+        ]
+      },
+      "constraints": {
+        "min_segment_len": 6,
+        "jump": 1
+      },
+      "stopping": {
+        "n_bkps": 2
+      },
+      "enabled_detectors": [
+        "pelt",
+        "binseg"
+      ],
+      "enabled_models": [
+        "l2"
+      ],
+      "tolerance": {
+        "index": 2
+      },
+      "profile_tags": [
+        "smoke",
+        "full"
+      ]
+    },
+    {
+      "id": "missing_02",
+      "category": "missing_gap",
+      "source": "synthetic",
+      "expected_behavior": "after deterministic fill, recover dominant mean-shift breakpoints",
+      "signal_spec": {
+        "kind": "piecewise_constant",
+        "seed": 6147,
+        "segments": [
+          {
+            "length": 35,
+            "mean": -1.0
+          },
+          {
+            "length": 45,
+            "mean": 2.0
+          },
+          {
+            "length": 40,
+            "mean": -0.5
+          }
+        ],
+        "noise": {
+          "distribution": "normal",
+          "std": 0.3
+        },
+        "missing_gaps": [
+          [
+            0,
+            5
+          ],
+          [
+            60,
+            66
+          ]
+        ]
+      },
+      "constraints": {
+        "min_segment_len": 6,
+        "jump": 1
+      },
+      "stopping": {
+        "n_bkps": 2
+      },
+      "enabled_detectors": [
+        "pelt",
+        "binseg"
+      ],
+      "enabled_models": [
+        "l2"
+      ],
+      "tolerance": {
+        "index": 2
+      },
+      "profile_tags": [
+        "full"
+      ]
+    },
+    {
+      "id": "missing_03",
+      "category": "missing_gap",
+      "source": "synthetic",
+      "expected_behavior": "after deterministic fill, recover dominant mean-shift breakpoints",
+      "signal_spec": {
+        "kind": "piecewise_constant",
+        "seed": 6148,
+        "segments": [
+          {
+            "length": 30,
+            "mean": 0.5
+          },
+          {
+            "length": 40,
+            "mean": 2.8
+          },
+          {
+            "length": 50,
+            "mean": -1.2
+          }
+        ],
+        "noise": {
+          "distribution": "normal",
+          "std": 0.3
+        },
+        "missing_gaps": [
+          [
+            25,
+            33
+          ],
+          [
+            95,
+            102
+          ]
+        ]
+      },
+      "constraints": {
+        "min_segment_len": 6,
+        "jump": 1
+      },
+      "stopping": {
+        "n_bkps": 2
+      },
+      "enabled_detectors": [
+        "pelt",
+        "binseg"
+      ],
+      "enabled_models": [
+        "l2"
+      ],
+      "tolerance": {
+        "index": 2
+      },
+      "profile_tags": [
+        "full"
+      ]
+    },
+    {
+      "id": "missing_04",
+      "category": "missing_gap",
+      "source": "synthetic",
+      "expected_behavior": "after deterministic fill, recover dominant mean-shift breakpoints",
+      "signal_spec": {
+        "kind": "piecewise_constant",
+        "seed": 6149,
+        "segments": [
+          {
+            "length": 45,
+            "mean": -0.2
+          },
+          {
+            "length": 35,
+            "mean": 2.3
+          },
+          {
+            "length": 40,
+            "mean": -1.0
+          }
+        ],
+        "noise": {
+          "distribution": "normal",
+          "std": 0.3
+        },
+        "missing_gaps": [
+          [
+            15,
+            23
+          ],
+          [
+            80,
+            88
+          ]
+        ]
+      },
+      "constraints": {
+        "min_segment_len": 6,
+        "jump": 1
+      },
+      "stopping": {
+        "n_bkps": 2
+      },
+      "enabled_detectors": [
+        "pelt",
+        "binseg"
+      ],
+      "enabled_models": [
+        "l2"
+      ],
+      "tolerance": {
+        "index": 2
+      },
+      "profile_tags": [
+        "full"
+      ]
+    },
+    {
+      "id": "real_01",
+      "category": "real_world_subset",
+      "source": "vendored_public_subset",
+      "expected_behavior": "match curated benchmark-slice breakpoints within tolerance",
+      "signal_spec": {
+        "kind": "real_world_file",
+        "fixture": "real_world/public_benchmark_slice_01.json"
+      },
+      "constraints": {
+        "min_segment_len": 2,
+        "jump": 1
+      },
+      "stopping": {
+        "n_bkps": 2
+      },
+      "enabled_detectors": [
+        "pelt",
+        "binseg"
+      ],
+      "enabled_models": [
+        "l2",
+        "normal"
+      ],
+      "tolerance": {
+        "index": 2
+      },
+      "profile_tags": [
+        "smoke",
+        "full"
+      ]
+    },
+    {
+      "id": "real_02",
+      "category": "real_world_subset",
+      "source": "vendored_public_subset",
+      "expected_behavior": "match curated benchmark-slice breakpoints within tolerance",
+      "signal_spec": {
+        "kind": "real_world_file",
+        "fixture": "real_world/public_benchmark_slice_02.json"
+      },
+      "constraints": {
+        "min_segment_len": 2,
+        "jump": 1
+      },
+      "stopping": {
+        "n_bkps": 3
+      },
+      "enabled_detectors": [
+        "pelt",
+        "binseg"
+      ],
+      "enabled_models": [
+        "l2",
+        "normal"
+      ],
+      "tolerance": {
+        "index": 2
+      },
+      "profile_tags": [
+        "smoke",
+        "full"
+      ]
+    },
+    {
+      "id": "real_03",
+      "category": "real_world_subset",
+      "source": "vendored_public_subset",
+      "expected_behavior": "match curated benchmark-slice breakpoints within tolerance",
+      "signal_spec": {
+        "kind": "real_world_file",
+        "fixture": "real_world/public_benchmark_slice_03.json"
+      },
+      "constraints": {
+        "min_segment_len": 2,
+        "jump": 1
+      },
+      "stopping": {
+        "n_bkps": 2
+      },
+      "enabled_detectors": [
+        "pelt",
+        "binseg"
+      ],
+      "enabled_models": [
+        "l2",
+        "normal"
+      ],
+      "tolerance": {
+        "index": 2
+      },
+      "profile_tags": [
+        "full"
+      ]
+    },
+    {
+      "id": "real_04",
+      "category": "real_world_subset",
+      "source": "vendored_public_subset",
+      "expected_behavior": "match curated benchmark-slice breakpoints within tolerance",
+      "signal_spec": {
+        "kind": "real_world_file",
+        "fixture": "real_world/public_benchmark_slice_04.json"
+      },
+      "constraints": {
+        "min_segment_len": 2,
+        "jump": 1
+      },
+      "stopping": {
+        "n_bkps": 2
+      },
+      "enabled_detectors": [
+        "pelt",
+        "binseg"
+      ],
+      "enabled_models": [
+        "l2",
+        "normal"
+      ],
+      "tolerance": {
+        "index": 2
+      },
+      "profile_tags": [
+        "full"
+      ]
+    },
+    {
+      "id": "real_05",
+      "category": "real_world_subset",
+      "source": "vendored_public_subset",
+      "expected_behavior": "match curated benchmark-slice breakpoints within tolerance",
+      "signal_spec": {
+        "kind": "real_world_file",
+        "fixture": "real_world/public_benchmark_slice_05.json"
+      },
+      "constraints": {
+        "min_segment_len": 2,
+        "jump": 1
+      },
+      "stopping": {
+        "n_bkps": 2
+      },
+      "enabled_detectors": [
+        "pelt",
+        "binseg"
+      ],
+      "enabled_models": [
+        "l2",
+        "normal"
+      ],
+      "tolerance": {
+        "index": 2
+      },
+      "profile_tags": [
+        "full"
+      ]
+    },
+    {
+      "id": "real_06",
+      "category": "real_world_subset",
+      "source": "vendored_public_subset",
+      "expected_behavior": "match curated benchmark-slice breakpoints within tolerance",
+      "signal_spec": {
+        "kind": "real_world_file",
+        "fixture": "real_world/public_benchmark_slice_06.json"
+      },
+      "constraints": {
+        "min_segment_len": 2,
+        "jump": 1
+      },
+      "stopping": {
+        "n_bkps": 2
+      },
+      "enabled_detectors": [
+        "pelt",
+        "binseg"
+      ],
+      "enabled_models": [
+        "l2",
+        "normal"
+      ],
+      "tolerance": {
+        "index": 2
+      },
+      "profile_tags": [
+        "full"
+      ]
+    }
+  ]
+}

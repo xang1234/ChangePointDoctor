@@ -1,0 +1,10 @@
+{
+  "dataset": "toy-public-corpus-05",
+  "source": "public benchmark-inspired low-snr level-shift slice",
+  "license": "CC-BY-compatible synthetic derivative",
+  "values": [
+    -0.2, 0.1, -0.1, 0.0, -0.3, 0.2, -0.2, 0.1, -0.1, 0.0,
+    1.8, 2.1, 1.9, 2.0, 1.7, 2.2, 1.8, 2.1, 1.9, 2.0,
+    0.6, 0.9, 0.7, 0.8, 0.5, 1.0, 0.6, 0.9, 0.7, 0.8
+  ]
+}

@@ -96,6 +96,20 @@ cpd/python/.venv/bin/python cpd/python/examples/csv_detect.py --csv /path/to/dat
 cpd/python/.venv/bin/python cpd/python/examples/plot_breakpoints.py --out /tmp/cpd_breakpoints.png
 ```
 
+## Ruptures Parity Suite
+
+To run the differential parity suite locally (after installing `ruptures` in the active
+environment):
+
+```bash
+cd cpd/python
+CPD_PARITY_PROFILE=smoke pytest -q tests/test_ruptures_parity.py
+CPD_PARITY_PROFILE=full CPD_PARITY_REPORT_OUT=/tmp/cpd-parity-report.json pytest -q tests/test_ruptures_parity.py
+```
+
+See [`../docs/parity_ruptures.md`](../docs/parity_ruptures.md) for corpus structure,
+tolerance rules, and CI thresholds.
+
 ## Troubleshooting
 
 1. `TypeError: expected float32 or float64`

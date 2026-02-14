@@ -1,0 +1,10 @@
+{
+  "dataset": "toy-public-corpus-01",
+  "source": "public benchmark-inspired univariate mean-shift slice",
+  "license": "CC-BY-compatible synthetic derivative",
+  "values": [
+    0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+    2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0,
+    -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0
+  ]
+}

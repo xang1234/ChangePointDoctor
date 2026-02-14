@@ -1,0 +1,10 @@
+{
+  "dataset": "toy-public-corpus-06",
+  "source": "public benchmark-inspired heteroskedastic slice",
+  "license": "CC-BY-compatible synthetic derivative",
+  "values": [
+    0.0, 0.05, -0.04, 0.03, -0.02, 0.01, -0.03, 0.02, -0.01, 0.0,
+    2.0, 2.4, 1.6, 2.5, 1.5, 2.3, 1.7, 2.2, 1.8, 2.1,
+    -1.0, -0.7, -1.3, -0.6, -1.4, -0.8, -1.2, -0.9, -1.1, -1.0
+  ]
+}
