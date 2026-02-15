@@ -2,7 +2,15 @@
 
 #![forbid(unsafe_code)]
 
-/// Online detector namespace placeholder.
+pub mod bocpd;
+
+pub use bocpd::{
+    BernoulliBetaPrior, BocpdConfig, BocpdDetector, BocpdState, ConstantHazard, GaussianNigPrior,
+    GeometricHazard, HazardFunction, HazardSpec, ObservationModel, ObservationStats,
+    PoissonGammaPrior,
+};
+
+/// Online detector namespace.
 pub fn crate_name() -> &'static str {
     let _ = (cpd_core::crate_name(), cpd_costs::crate_name());
     "cpd-online"

@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "profiles": {
+    "pr_smoke": {
+      "min_updates_per_sec": 1000.0,
+      "max_cancellation_latency_p95_ms": 2000,
+      "max_rss_kib": null,
+      "max_rss_slope_kib_per_hr": null
+    },
+    "nightly_1h": {
+      "min_updates_per_sec": 1000.0,
+      "max_cancellation_latency_p95_ms": 2000,
+      "max_rss_kib": 2500000,
+      "max_rss_slope_kib_per_hr": 50000.0
+    },
+    "weekly_24h": {
+      "min_updates_per_sec": 250.0,
+      "max_cancellation_latency_p95_ms": 2000,
+      "max_rss_kib": 3000000,
+      "max_rss_slope_kib_per_hr": 15000.0
+    }
+  }
+}

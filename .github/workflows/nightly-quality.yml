@@ -82,14 +82,21 @@ jobs:
         with:
           workspaces: cpd
 
-      - name: Run cpd-online concurrency + soak scaffold tests
+      - name: Run cpd-online BOCPD concurrency + soak tests
         working-directory: cpd
         env:
           CPD_SOAK_PROFILE: nightly_1h
-          CPD_SOAK_METRICS_OUT: nightly-soak-metrics.json
+          CPD_SOAK_METRICS_OUT: ${{ github.workspace }}/cpd/nightly-soak-metrics.json
         run: |
           cargo test -p cpd-online --test concurrency
-          cargo test -p cpd-online --test soak
+          cargo test -p cpd-online --test soak soak_profile_gate_metrics_are_emitted -- --exact
+
+      - name: Enforce nightly soak metric thresholds
+        run: |
+          python3 .github/scripts/soak_metrics_gate.py \
+            --thresholds cpd/benchmarks/online_soak_thresholds.v1.json \
+            --metrics cpd/nightly-soak-metrics.json \
+            --profile nightly_1h
 
       - name: Run release-mode workspace tests
         working-directory: cpd
@@ -118,8 +125,8 @@ jobs:
   soak-tests-24h:
     name: soak-tests-24h
     if: ${{ github.event_name == 'workflow_dispatch' || github.event.schedule == '0 4 * * 0' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 120
+    runs-on: [self-hosted, linux, x64, long-soak]
+    timeout-minutes: 1500
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -132,12 +139,20 @@ jobs:
         with:
           workspaces: cpd
 
-      - name: Run cpd-online weekly soak scaffold profile
+      - name: Run cpd-online BOCPD weekly soak profile
         working-directory: cpd
         env:
           CPD_SOAK_PROFILE: weekly_24h
-          CPD_SOAK_METRICS_OUT: weekly-soak-metrics.json
-        run: cargo test -p cpd-online --test soak soak_rss_metrics_are_well_formed_when_available -- --exact
+          CPD_SOAK_ENFORCE_RUNTIME: "1"
+          CPD_SOAK_METRICS_OUT: ${{ github.workspace }}/cpd/weekly-soak-metrics.json
+        run: cargo test -p cpd-online --test soak soak_profile_gate_metrics_are_emitted -- --exact
+
+      - name: Enforce weekly soak metric thresholds
+        run: |
+          python3 .github/scripts/soak_metrics_gate.py \
+            --thresholds cpd/benchmarks/online_soak_thresholds.v1.json \
+            --metrics cpd/weekly-soak-metrics.json \
+            --profile weekly_24h
 
       - name: Upload weekly soak metrics artifact
         uses: actions/upload-artifact@v4

@@ -3,7 +3,9 @@
 #![forbid(unsafe_code)]
 #![allow(dead_code)]
 
-use cpd_core::{CpdError, ExecutionContext, OnlineDetector, OnlineStepResult};
+use cpd_core::{
+    CancelToken, Constraints, CpdError, ExecutionContext, OnlineDetector, OnlineStepResult,
+};
 use std::time::{Duration, Instant};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -21,6 +23,14 @@ impl SoakProfile {
             Self::Weekly24h => 86_400,
         }
     }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::PrSmoke => "pr_smoke",
+            Self::Nightly1h => "nightly_1h",
+            Self::Weekly24h => "weekly_24h",
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -28,6 +38,8 @@ pub struct HarnessConfig {
     pub steps: usize,
     pub checkpoint_every: usize,
     pub sleep_per_step_ms: u64,
+    pub enforce_target_runtime: bool,
+    pub target_runtime_seconds: u64,
 }
 
 impl HarnessConfig {
@@ -37,16 +49,22 @@ impl HarnessConfig {
                 steps: 2_000,
                 checkpoint_every: 100,
                 sleep_per_step_ms: 0,
+                enforce_target_runtime: false,
+                target_runtime_seconds: profile.target_runtime_seconds(),
             },
             SoakProfile::Nightly1h => Self {
                 steps: 10_000,
                 checkpoint_every: 200,
                 sleep_per_step_ms: 0,
+                enforce_target_runtime: false,
+                target_runtime_seconds: profile.target_runtime_seconds(),
             },
             SoakProfile::Weekly24h => Self {
                 steps: 50_000,
                 checkpoint_every: 500,
                 sleep_per_step_ms: 0,
+                enforce_target_runtime: false,
+                target_runtime_seconds: profile.target_runtime_seconds(),
             },
         }
     }
@@ -68,6 +86,12 @@ pub fn profile_from_env() -> SoakProfile {
         "weekly_24h" => SoakProfile::Weekly24h,
         _ => SoakProfile::PrSmoke,
     }
+}
+
+pub fn enforce_runtime_from_env() -> bool {
+    std::env::var("CPD_SOAK_ENFORCE_RUNTIME")
+        .ok()
+        .is_some_and(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
@@ -149,36 +173,76 @@ impl OnlineDetector for MockOnlineDetector {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CancellationLatencyQuantiles {
+    pub p50_ms: u128,
+    pub p95_ms: u128,
+}
+
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct HarnessMetrics {
     pub elapsed_ms: u128,
     pub updates_per_sec: f64,
+    /// Backwards-compatible alias for p95 latency.
     pub cancellation_latency_ms: Option<u128>,
+    pub cancellation_latency_p50_ms: Option<u128>,
+    pub cancellation_latency_p95_ms: Option<u128>,
     pub checkpoint_roundtrip_count: usize,
     pub max_rss_kib: Option<u64>,
     pub rss_slope_kib_per_hr: Option<f64>,
     pub alert_flip_count: usize,
 }
 
-pub fn run_soak(
-    detector: &mut MockOnlineDetector,
+pub fn attach_cancellation_quantiles(
+    metrics: &mut HarnessMetrics,
+    quantiles: &CancellationLatencyQuantiles,
+) {
+    metrics.cancellation_latency_ms = Some(quantiles.p95_ms);
+    metrics.cancellation_latency_p50_ms = Some(quantiles.p50_ms);
+    metrics.cancellation_latency_p95_ms = Some(quantiles.p95_ms);
+}
+
+pub fn run_soak<D>(
+    detector: &mut D,
     config: &HarnessConfig,
+    profile: SoakProfile,
     ctx: &ExecutionContext<'_>,
-) -> Result<HarnessMetrics, CpdError> {
+) -> Result<HarnessMetrics, CpdError>
+where
+    D: OnlineDetector,
+{
     if config.steps == 0 {
         return Err(CpdError::invalid_input(
             "soak harness requires config.steps >= 1",
         ));
     }
 
+    if config.checkpoint_every == 0 {
+        return Err(CpdError::invalid_input(
+            "soak harness requires config.checkpoint_every >= 1",
+        ));
+    }
+
     let started_at = Instant::now();
     let mut checkpoint_roundtrip_count = 0usize;
     let mut alert_flip_count = 0usize;
+    let mut updates_seen = 0usize;
     let mut last_alert: Option<bool> = None;
     let mut rss_samples: Vec<(f64, u64)> = vec![];
 
-    for step in 0..config.steps {
-        let result = detector.update(&[step as f64], None, ctx)?;
+    loop {
+        let hit_step_limit = updates_seen >= config.steps;
+        let hit_runtime_target = started_at.elapsed().as_secs() >= config.target_runtime_seconds;
+
+        if !config.enforce_target_runtime {
+            if hit_step_limit {
+                break;
+            }
+        } else if hit_step_limit && hit_runtime_target {
+            break;
+        }
+
+        let result = detector.update(&[synthetic_signal(updates_seen)], None, ctx)?;
 
         if let Some(previous) = last_alert
             && previous != result.alert
@@ -187,7 +251,9 @@ pub fn run_soak(
         }
         last_alert = Some(result.alert);
 
-        if config.checkpoint_every > 0 && (step + 1).is_multiple_of(config.checkpoint_every) {
+        updates_seen += 1;
+
+        if updates_seen.is_multiple_of(config.checkpoint_every) {
             let saved = detector.save_state();
             detector.load_state(&saved);
             checkpoint_roundtrip_count += 1;
@@ -201,10 +267,18 @@ pub fn run_soak(
         if config.sleep_per_step_ms > 0 {
             std::thread::sleep(Duration::from_millis(config.sleep_per_step_ms));
         }
+
+        // Keep profile target as a hard upper-bound guard in case configuration drifts.
+        if config.enforce_target_runtime
+            && started_at.elapsed().as_secs() >= profile.target_runtime_seconds()
+            && updates_seen >= config.steps
+        {
+            break;
+        }
     }
 
     let elapsed = started_at.elapsed();
-    let updates_per_sec = config.steps as f64 / elapsed.as_secs_f64().max(1e-9);
+    let updates_per_sec = updates_seen as f64 / elapsed.as_secs_f64().max(1e-9);
     let max_rss_kib = rss_samples.iter().map(|(_, rss)| *rss).max();
     let rss_slope_kib_per_hr = estimate_rss_slope_kib_per_hr(&rss_samples);
 
@@ -212,11 +286,95 @@ pub fn run_soak(
         elapsed_ms: elapsed.as_millis(),
         updates_per_sec,
         cancellation_latency_ms: None,
+        cancellation_latency_p50_ms: None,
+        cancellation_latency_p95_ms: None,
         checkpoint_roundtrip_count,
         max_rss_kib,
         rss_slope_kib_per_hr,
         alert_flip_count,
     })
+}
+
+pub fn measure_cancellation_latency_quantiles_ms<D, F>(
+    make_detector: F,
+    trials: usize,
+    cancellation_lead_ms: u64,
+) -> Result<CancellationLatencyQuantiles, CpdError>
+where
+    D: OnlineDetector + Send + 'static,
+    D::State: Send + 'static,
+    F: Fn() -> D + Send + Sync + Copy + 'static,
+{
+    if trials == 0 {
+        return Err(CpdError::invalid_input(
+            "cancellation latency measurement requires trials >= 1",
+        ));
+    }
+
+    let mut samples_ms: Vec<u128> = Vec::with_capacity(trials);
+
+    for _ in 0..trials {
+        let cancel = CancelToken::new();
+        let worker_cancel = cancel.clone();
+        let worker = std::thread::spawn(move || {
+            let constraints = Constraints::default();
+            let ctx = ExecutionContext::new(&constraints).with_cancel(&worker_cancel);
+            let mut detector = make_detector();
+            let mut step = 0usize;
+
+            loop {
+                match detector.update(&[synthetic_signal(step)], None, &ctx) {
+                    Ok(_) => step = step.saturating_add(1),
+                    Err(err) => return err,
+                }
+            }
+        });
+
+        std::thread::sleep(Duration::from_millis(cancellation_lead_ms));
+        let cancelled_at = Instant::now();
+        cancel.cancel();
+
+        let err = worker
+            .join()
+            .map_err(|_| CpdError::resource_limit("cancellation worker thread panicked"))?;
+
+        if err.to_string() != "cancelled" {
+            return Err(CpdError::resource_limit(format!(
+                "expected cancellation error from worker; got {err}"
+            )));
+        }
+
+        samples_ms.push(cancelled_at.elapsed().as_millis());
+    }
+
+    samples_ms.sort_unstable();
+
+    Ok(CancellationLatencyQuantiles {
+        p50_ms: percentile_ms(&samples_ms, 0.50),
+        p95_ms: percentile_ms(&samples_ms, 0.95),
+    })
+}
+
+fn percentile_ms(sorted_samples: &[u128], q: f64) -> u128 {
+    if sorted_samples.is_empty() {
+        return 0;
+    }
+
+    let q = q.clamp(0.0, 1.0);
+    let max_index = sorted_samples.len() - 1;
+    let rank = (q * (max_index as f64)).round() as usize;
+    sorted_samples[rank.min(max_index)]
+}
+
+fn synthetic_signal(step: usize) -> f64 {
+    let regime = (step / 250) % 3;
+    let baseline = match regime {
+        0 => 0.0,
+        1 => 3.5,
+        _ => -1.8,
+    };
+    let wobble = ((step as f64) * 0.03).sin() * 0.2;
+    baseline + wobble
 }
 
 pub fn estimate_rss_slope_kib_per_hr(samples: &[(f64, u64)]) -> Option<f64> {
@@ -255,17 +413,23 @@ pub fn emit_metrics_json_if_requested(
         .cancellation_latency_ms
         .map(|value| value.to_string())
         .unwrap_or_else(|| "null".to_string());
+    let cancellation_latency_p50_ms = metrics
+        .cancellation_latency_p50_ms
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "null".to_string());
+    let cancellation_latency_p95_ms = metrics
+        .cancellation_latency_p95_ms
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "null".to_string());
 
     let payload = format!(
-        "{{\n  \"scenario\": \"{scenario}\",\n  \"profile\": \"{}\",\n  \"target_runtime_seconds\": {},\n  \"updates_per_sec\": {},\n  \"cancellation_latency_ms\": {},\n  \"checkpoint_roundtrip_count\": {},\n  \"max_rss_kib\": {},\n  \"rss_slope_kib_per_hr\": {},\n  \"alert_flip_count\": {}\n}}\n",
-        match profile {
-            SoakProfile::PrSmoke => "pr_smoke",
-            SoakProfile::Nightly1h => "nightly_1h",
-            SoakProfile::Weekly24h => "weekly_24h",
-        },
+        "{{\n  \"scenario\": \"{scenario}\",\n  \"profile\": \"{}\",\n  \"target_runtime_seconds\": {},\n  \"updates_per_sec\": {},\n  \"cancellation_latency_ms\": {},\n  \"cancellation_latency_p50_ms\": {},\n  \"cancellation_latency_p95_ms\": {},\n  \"checkpoint_roundtrip_count\": {},\n  \"max_rss_kib\": {},\n  \"rss_slope_kib_per_hr\": {},\n  \"alert_flip_count\": {}\n}}\n",
+        profile.as_str(),
         profile.target_runtime_seconds(),
         metrics.updates_per_sec,
         cancellation_latency_ms,
+        cancellation_latency_p50_ms,
+        cancellation_latency_p95_ms,
         metrics.checkpoint_roundtrip_count,
         max_rss_kib,
         rss_slope_kib_per_hr,
@@ -296,5 +460,14 @@ fn current_rss_kib() -> Option<u64> {
 
 #[cfg(not(target_os = "linux"))]
 fn current_rss_kib() -> Option<u64> {
-    None
+    let pid = std::process::id().to_string();
+    let output = std::process::Command::new("ps")
+        .args(["-o", "rss=", "-p", &pid])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8(output.stdout).ok()?;
+    text.trim().parse::<u64>().ok()
 }
