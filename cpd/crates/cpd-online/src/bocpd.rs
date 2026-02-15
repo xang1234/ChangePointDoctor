@@ -22,7 +22,7 @@ pub struct ConstantHazard {
 
 impl ConstantHazard {
     pub fn new(p_change: f64) -> Result<Self, CpdError> {
-        if !p_change.is_finite() || !(0.0 < p_change && p_change < 1.0) {
+        if !(p_change.is_finite() && 0.0 < p_change && p_change < 1.0) {
             return Err(CpdError::invalid_input(format!(
                 "constant hazard p_change must be finite and in (0,1); got {p_change}"
             )));
@@ -390,12 +390,12 @@ impl BocpdConfig {
             ));
         }
 
-        if let Some(threshold) = self.log_prob_threshold {
-            if !threshold.is_finite() || threshold > 0.0 {
-                return Err(CpdError::invalid_input(
-                    "log_prob_threshold must be finite and <= 0",
-                ));
-            }
+        if let Some(threshold) = self.log_prob_threshold
+            && (!threshold.is_finite() || threshold > 0.0)
+        {
+            return Err(CpdError::invalid_input(
+                "log_prob_threshold must be finite and <= 0",
+            ));
         }
 
         if !self.alert_threshold.is_finite() || !(0.0..=1.0).contains(&self.alert_threshold) {

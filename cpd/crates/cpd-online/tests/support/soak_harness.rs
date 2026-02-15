@@ -205,7 +205,7 @@ pub fn attach_cancellation_quantiles(
 pub fn run_soak<D>(
     detector: &mut D,
     config: &HarnessConfig,
-    profile: SoakProfile,
+    _profile: SoakProfile,
     ctx: &ExecutionContext<'_>,
 ) -> Result<HarnessMetrics, CpdError>
 where
@@ -234,11 +234,11 @@ where
         let hit_step_limit = updates_seen >= config.steps;
         let hit_runtime_target = started_at.elapsed().as_secs() >= config.target_runtime_seconds;
 
-        if !config.enforce_target_runtime {
-            if hit_step_limit {
+        if config.enforce_target_runtime {
+            if hit_runtime_target {
                 break;
             }
-        } else if hit_step_limit && hit_runtime_target {
+        } else if hit_step_limit {
             break;
         }
 
@@ -266,14 +266,6 @@ where
 
         if config.sleep_per_step_ms > 0 {
             std::thread::sleep(Duration::from_millis(config.sleep_per_step_ms));
-        }
-
-        // Keep profile target as a hard upper-bound guard in case configuration drifts.
-        if config.enforce_target_runtime
-            && started_at.elapsed().as_secs() >= profile.target_runtime_seconds()
-            && updates_seen >= config.steps
-        {
-            break;
         }
     }
 
