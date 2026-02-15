@@ -726,6 +726,7 @@ fn generate_intervals(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn best_split_for_interval_sequential<C: CostModel>(
     model: &C,
     cache: &C::Cache,
