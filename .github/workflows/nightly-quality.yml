@@ -131,11 +131,12 @@ jobs:
           if-no-files-found: error
 
       - name: Upload BOCPD perf metrics artifact
+        if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:
           name: cpd-online-bocpd-perf-metrics-nightly-1h
           path: cpd/nightly-bocpd-perf-metrics.json
-          if-no-files-found: error
+          if-no-files-found: warn
 
   soak-tests-24h:
     name: soak-tests-24h

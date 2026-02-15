@@ -9,14 +9,16 @@ This document defines the BOCPD online performance contract for `CPD-45f.1`.
 - Dimensionality: `d=1`
 - Hazard: constant (`p_change = 1/200`)
 - State bound: `max_run_length = 2000`
-- Pruning: enabled (`log_prob_threshold = -35.0`)
+- Pruning: enabled (`log_prob_threshold = -20.0`)
 - Warmup updates: `2500`
 - Measured updates: `12000`
+- Signal profile: deterministic multi-regime signal with smooth intra-regime wobble and regular regime shifts every `96` points (representative steady-state production mix)
 
 ## SLO Thresholds
 
 - `p99_update_us <= 75`
 - `updates_per_sec >= 150000`
+- `p95_run_length_mode >= 64` (occupancy guard to avoid degenerate always-reset traces)
 
 Definitions:
 
