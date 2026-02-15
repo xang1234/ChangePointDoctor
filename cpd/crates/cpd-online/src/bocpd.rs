@@ -826,6 +826,91 @@ mod tests {
         ExecutionContext::new(constraints)
     }
 
+    fn probs_from_log_probs(log_probs: &[f64]) -> Vec<f64> {
+        log_probs.iter().map(|value| value.exp()).collect()
+    }
+
+    #[test]
+    fn known_posterior_first_step_matches_closed_form() {
+        let hazard_p = 0.2;
+        let mut detector = BocpdDetector::new(BocpdConfig {
+            hazard: HazardSpec::Constant(ConstantHazard::new(hazard_p).expect("valid hazard")),
+            observation: ObservationModel::Bernoulli {
+                prior: super::BernoulliBetaPrior {
+                    alpha: 1.0,
+                    beta: 1.0,
+                },
+            },
+            max_run_length: 32,
+            log_prob_threshold: None,
+            ..BocpdConfig::default()
+        })
+        .expect("config should be valid");
+
+        detector
+            .update(&[1.0], None, &ctx())
+            .expect("update should succeed");
+
+        let probs = probs_from_log_probs(&detector.state().log_run_probs);
+        let expected = [hazard_p, 1.0 - hazard_p];
+
+        assert_eq!(probs.len(), expected.len());
+        for (idx, (observed, expected)) in probs.iter().zip(expected).enumerate() {
+            assert!(
+                (observed - expected).abs() < 1e-12,
+                "posterior mismatch at run_length={idx}: observed={observed}, expected={expected}",
+            );
+        }
+    }
+
+    #[test]
+    fn known_posterior_two_step_bernoulli_matches_closed_form() {
+        let hazard_p = 0.2;
+        let mut detector = BocpdDetector::new(BocpdConfig {
+            hazard: HazardSpec::Constant(ConstantHazard::new(hazard_p).expect("valid hazard")),
+            observation: ObservationModel::Bernoulli {
+                prior: super::BernoulliBetaPrior {
+                    alpha: 1.0,
+                    beta: 1.0,
+                },
+            },
+            max_run_length: 32,
+            log_prob_threshold: None,
+            ..BocpdConfig::default()
+        })
+        .expect("config should be valid");
+
+        detector
+            .update(&[1.0], None, &ctx())
+            .expect("first update should succeed");
+        let step = detector
+            .update(&[1.0], None, &ctx())
+            .expect("second update should succeed");
+
+        let normalizer = 4.0 - hazard_p;
+        let expected = [
+            (3.0 * hazard_p) / normalizer,
+            (4.0 * hazard_p * (1.0 - hazard_p)) / normalizer,
+            (4.0 * (1.0 - hazard_p) * (1.0 - hazard_p)) / normalizer,
+        ];
+
+        let probs = probs_from_log_probs(&detector.state().log_run_probs);
+        assert_eq!(probs.len(), expected.len());
+        for (idx, (observed, expected)) in probs.iter().zip(expected).enumerate() {
+            assert!(
+                (observed - expected).abs() < 1e-12,
+                "posterior mismatch at run_length={idx}: observed={observed}, expected={expected}",
+            );
+        }
+
+        assert!(
+            (step.p_change - expected[0]).abs() < 1e-12,
+            "step p_change mismatch: observed={}, expected={}",
+            step.p_change,
+            expected[0]
+        );
+    }
+
     #[test]
     fn constant_series_keeps_change_probability_low() {
         let mut detector = BocpdDetector::new(BocpdConfig {

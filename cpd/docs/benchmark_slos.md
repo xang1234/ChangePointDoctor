@@ -2,6 +2,8 @@
 
 This document defines the protected benchmark cases and CI gating policy for MVP-A offline core performance.
 
+For MVP-C BOCPD online streaming performance thresholds, see `cpd/docs/online_bocpd_perf_slos.md`.
+
 ## CI Gate Policy
 
 - Relative gate (PRs): compare current benchmark metrics against the latest rolling `main` baseline artifact.

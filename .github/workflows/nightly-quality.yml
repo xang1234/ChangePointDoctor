@@ -99,6 +99,13 @@ jobs:
             --metrics cpd/nightly-soak-metrics.json \
             --profile nightly_1h
 
+      - name: Run BOCPD perf gate (release)
+        working-directory: cpd
+        env:
+          CPD_ONLINE_PERF_ENFORCE: "1"
+          CPD_ONLINE_PERF_METRICS_OUT: ${{ github.workspace }}/cpd/nightly-bocpd-perf-metrics.json
+        run: cargo test -p cpd-online --test perf bocpd_gaussian_perf_contract --release -- --exact --nocapture
+
       - name: Run release-mode workspace tests
         working-directory: cpd
         run: cargo test --workspace --release --all-targets --exclude cpd-bench
@@ -121,6 +128,13 @@ jobs:
         with:
           name: cpd-online-soak-metrics-nightly-1h
           path: cpd/nightly-soak-metrics.json
+          if-no-files-found: error
+
+      - name: Upload BOCPD perf metrics artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cpd-online-bocpd-perf-metrics-nightly-1h
+          path: cpd/nightly-bocpd-perf-metrics.json
           if-no-files-found: error
 
   soak-tests-24h:
