@@ -153,3 +153,103 @@ def test_run_ruptures_case_pelt_known_k_uses_penalty_path(monkeypatch: pytest.Mo
 
     assert breakpoints == [4, 6]
     assert runtime_ms >= 0.0
+
+
+def test_run_cpd_case_pelt_known_k_uses_penalty_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _FakeResult:
+        def __init__(self, breakpoints: list[int]) -> None:
+            self.breakpoints = breakpoints
+
+    class _FakePelt:
+        def __init__(self, model: str, min_segment_len: int, jump: int) -> None:
+            self.calls: list[float] = []
+
+        def fit(self, values: np.ndarray) -> "_FakePelt":
+            return self
+
+        def predict(
+            self, n_bkps: int | None = None, pen: float | None = None
+        ) -> _FakeResult:
+            if n_bkps is not None:
+                raise AssertionError("cpd parity path should not call predict(n_bkps=...)")
+            assert pen is not None
+            self.calls.append(float(pen))
+            if pen < 0.5:
+                return _FakeResult([2, 4, 6])
+            if pen < 2.0:
+                return _FakeResult([4, 6])
+            return _FakeResult([6])
+
+    class _FakeBinseg:
+        def __init__(self, model: str, min_segment_len: int, jump: int) -> None:
+            pass
+
+        def fit(self, values: np.ndarray) -> "_FakeBinseg":
+            return self
+
+        def predict(
+            self, n_bkps: int | None = None, pen: float | None = None
+        ) -> _FakeResult:
+            _ = (n_bkps, pen)
+            return _FakeResult([6])
+
+    class _FakeCpd:
+        Pelt = _FakePelt
+        Binseg = _FakeBinseg
+
+    monkeypatch.setattr(ph.importlib, "import_module", lambda name: _FakeCpd if name == "cpd" else None)
+
+    values = np.array([0.0, 0.0, 1.0, 1.0, 2.0, 2.0], dtype=np.float64)
+    breakpoints, runtime_ms = ph.run_cpd_case(
+        values=values,
+        detector="pelt",
+        model="l2",
+        constraints={"min_segment_len": 2, "jump": 1},
+        stopping={"n_bkps": 1},
+    )
+
+    assert breakpoints == [4, 6]
+    assert runtime_ms >= 0.0
+
+
+def test_run_cpd_case_pelt_known_k_returns_best_bracket_when_exact_unreachable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FakeResult:
+        def __init__(self, breakpoints: list[int]) -> None:
+            self.breakpoints = breakpoints
+
+    class _FakePelt:
+        def __init__(self, model: str, min_segment_len: int, jump: int) -> None:
+            pass
+
+        def fit(self, values: np.ndarray) -> "_FakePelt":
+            return self
+
+        def predict(
+            self, n_bkps: int | None = None, pen: float | None = None
+        ) -> _FakeResult:
+            if n_bkps is not None:
+                raise AssertionError("cpd parity path should not call predict(n_bkps=...)")
+            assert pen is not None
+            if pen < 0.5:
+                return _FakeResult([1, 2, 4, 6])  # 3 changes
+            return _FakeResult([6])  # 0 changes
+
+    class _FakeCpd:
+        Pelt = _FakePelt
+        Binseg = _FakePelt
+
+    monkeypatch.setattr(ph.importlib, "import_module", lambda name: _FakeCpd if name == "cpd" else None)
+
+    values = np.array([0.0, 0.0, 1.0, 1.0, 2.0, 2.0], dtype=np.float64)
+    breakpoints, runtime_ms = ph.run_cpd_case(
+        values=values,
+        detector="pelt",
+        model="l2",
+        constraints={"min_segment_len": 2, "jump": 1},
+        stopping={"n_bkps": 2},
+    )
+
+    assert breakpoints == [1, 2, 4, 6]
+    assert runtime_ms >= 0.0

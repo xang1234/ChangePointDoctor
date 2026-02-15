@@ -36,7 +36,7 @@ algorithm descriptions, and first-principles derivations.
 | --- | --- | --- |
 | PELT (`cpd-offline`) | Implemented | Killick, Fearnhead, Eckley (2012), JASA, DOI: 10.1080/01621459.2012.737745 |
 | Binary Segmentation (`cpd-offline`) | Implemented | General binary segmentation family; survey context in Truong, Oudre, Vayatis (2020), Signal Processing, DOI: 10.1016/j.sigpro.2019.107299 |
-| Wild Binary Segmentation (WBS) | Planned | Fryzlewicz (2014), Annals of Statistics, DOI: 10.1214/14-AOS1245 |
+| Wild Binary Segmentation (WBS) | Implemented | Fryzlewicz (2014), Annals of Statistics, DOI: 10.1214/14-AOS1245 |
 | Bayesian Online Changepoint Detection (BOCPD) | Planned | Adams, MacKay (2007), arXiv:0710.3742 |
 | Offline CPD taxonomy and benchmarking context | Cross-cutting guidance | Truong, Oudre, Vayatis (2020), Signal Processing, DOI: 10.1016/j.sigpro.2019.107299 |
 

@@ -26,6 +26,15 @@ before debugging `pyo3`/linker errors.
 - `cpd.detect_offline`: low-level API for explicit detector/cost/constraints/stopping/preprocess selection.
 - `cpd.OfflineChangePointResult`: typed result object with breakpoints and diagnostics.
 
+## Masking Risk Guidance
+
+If BinSeg diagnostics indicate masking risk (for example warnings that closely
+spaced weaker changes may be hidden), prefer Wild Binary Segmentation (WBS) in
+Rust/offline flows (`cpd-offline::Wbs`) for stronger recovery.
+
+Current Python high-level APIs intentionally remain limited to `cpd.Pelt` and
+`cpd.Binseg`; WBS is not yet exposed as a Python high-level detector.
+
 ## Quickstart
 
 See [`QUICKSTART.md`](./QUICKSTART.md) for a full walkthrough.

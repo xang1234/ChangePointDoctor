@@ -6,7 +6,7 @@ import math
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 
@@ -451,18 +451,25 @@ def run_cpd_case(
         kwargs["max_depth"] = int(constraints["max_depth"])
 
     detector_cls = cpd.Pelt if detector == "pelt" else cpd.Binseg
-
-    predict_kwargs: dict[str, Any]
-    if "n_bkps" in stopping:
-        predict_kwargs = {"n_bkps": int(stopping["n_bkps"])}
-    else:
-        predict_kwargs = {"pen": float(stopping["pen"])}
-
     start = time.perf_counter()
-    result = detector_cls(**kwargs).fit(values).predict(**predict_kwargs)
+    fit = detector_cls(**kwargs).fit(values)
+    if "n_bkps" in stopping:
+        target_k = int(stopping["n_bkps"])
+        if detector == "pelt":
+            breakpoints = _cpd_pelt_predict_known_k(
+                predictor=fit.predict,
+                target_k=target_k,
+                n_samples=values.shape[0],
+            )
+        else:
+            result = fit.predict(n_bkps=target_k)
+            breakpoints = [int(bp) for bp in result.breakpoints]
+    else:
+        result = fit.predict(pen=float(stopping["pen"]))
+        breakpoints = [int(bp) for bp in result.breakpoints]
     runtime_ms = (time.perf_counter() - start) * 1000.0
 
-    return [int(bp) for bp in result.breakpoints], runtime_ms
+    return breakpoints, runtime_ms
 
 
 def run_ruptures_case(
@@ -508,11 +515,6 @@ def _ruptures_pelt_predict_known_k(
     target_k: int,
     n_samples: int,
 ) -> list[int]:
-    if target_k < 0:
-        raise ValueError(f"target_k must be >= 0; got {target_k}")
-    if n_samples <= 0:
-        raise ValueError(f"n_samples must be >= 1; got {n_samples}")
-
     cache: dict[float, list[int]] = {}
 
     def _predict_for_pen(penalty: float) -> list[int]:
@@ -523,28 +525,65 @@ def _ruptures_pelt_predict_known_k(
         cache[penalty] = predicted
         return predicted
 
+    return _predict_known_k_via_penalty_path(
+        predictor=_predict_for_pen, target_k=target_k, n_samples=n_samples
+    )
+
+
+def _cpd_pelt_predict_known_k(
+    predictor: Any,
+    target_k: int,
+    n_samples: int,
+) -> list[int]:
+    cache: dict[float, list[int]] = {}
+
+    def _predict_for_pen(penalty: float) -> list[int]:
+        cached = cache.get(penalty)
+        if cached is not None:
+            return cached
+
+        result = predictor(pen=penalty)
+        predicted = [int(bp) for bp in result.breakpoints]
+        cache[penalty] = predicted
+        return predicted
+
+    return _predict_known_k_via_penalty_path(
+        predictor=_predict_for_pen, target_k=target_k, n_samples=n_samples
+    )
+
+
+def _predict_known_k_via_penalty_path(
+    predictor: Callable[[float], list[int]],
+    target_k: int,
+    n_samples: int,
+) -> list[int]:
+    if target_k < 0:
+        raise ValueError(f"target_k must be >= 0; got {target_k}")
+    if n_samples <= 0:
+        raise ValueError(f"n_samples must be >= 1; got {n_samples}")
+
     def _n_changes(predicted: list[int]) -> int:
         if not predicted:
             return 0
         return max(0, len(predicted) - 1)
 
     if target_k == 0:
-        return _predict_for_pen(1.0e12)
+        return predictor(1.0e12)
 
     low_pen = 1.0e-12
-    low_pred = _predict_for_pen(low_pen)
+    low_pred = predictor(low_pen)
     low_changes = _n_changes(low_pred)
     if low_changes < target_k:
         return low_pred
 
     high_pen = 1.0
-    high_pred = _predict_for_pen(high_pen)
+    high_pred = predictor(high_pen)
     high_changes = _n_changes(high_pred)
     for _ in range(80):
         if high_changes <= target_k:
             break
         high_pen *= 2.0
-        high_pred = _predict_for_pen(high_pen)
+        high_pred = predictor(high_pen)
         high_changes = _n_changes(high_pred)
 
     best_pred = low_pred
@@ -565,7 +604,7 @@ def _ruptures_pelt_predict_known_k(
     right_pen = high_pen
     for _ in range(64):
         mid_pen = 0.5 * (left_pen + right_pen)
-        mid_pred = _predict_for_pen(mid_pen)
+        mid_pred = predictor(mid_pen)
         mid_changes = _n_changes(mid_pred)
         delta = abs(mid_changes - target_k)
         if delta < best_delta:
