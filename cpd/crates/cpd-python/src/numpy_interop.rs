@@ -527,6 +527,7 @@ mod tests {
     use pyo3::exceptions::{PyTypeError, PyValueError};
     use pyo3::types::{PyAnyMethods, PyDict, PyDictMethods, PyModule};
     use pyo3::{PyErr, Python};
+    use std::ffi::CString;
     use std::sync::Once;
 
     fn with_python<F, R>(f: F) -> R
@@ -539,10 +540,11 @@ mod tests {
     }
 
     fn eval_numpy<'py>(py: Python<'py>, expr: &str) -> pyo3::Bound<'py, pyo3::PyAny> {
-        let np = PyModule::import_bound(py, "numpy").expect("numpy should import");
-        let locals = PyDict::new_bound(py);
+        let np = PyModule::import(py, "numpy").expect("numpy should import");
+        let locals = PyDict::new(py);
         locals.set_item("np", np).expect("locals should accept np");
-        py.eval_bound(expr, None, Some(&locals))
+        let expr = CString::new(expr).expect("numpy expression should not contain NUL bytes");
+        py.eval(expr.as_c_str(), None, Some(&locals))
             .expect("python expression should evaluate")
     }
 

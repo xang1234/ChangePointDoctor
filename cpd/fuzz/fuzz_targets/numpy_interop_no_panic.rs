@@ -8,13 +8,15 @@ mod common;
 use libfuzzer_sys::fuzz_target;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyDictMethods, PyList, PyModule};
+use std::ffi::CString;
 
 fn eval_numpy<'py>(
     py: Python<'py>,
     expr: &str,
     locals: &Bound<'py, PyDict>,
 ) -> Option<Bound<'py, PyAny>> {
-    py.eval_bound(expr, None, Some(locals)).ok()
+    let expr = CString::new(expr).ok()?;
+    py.eval(expr.as_c_str(), None, Some(locals)).ok()
 }
 
 fuzz_target!(|data: &[u8]| {
@@ -33,10 +35,10 @@ fuzz_target!(|data: &[u8]| {
     let payload = cursor.take_padded(payload_len);
 
     Python::with_gil(|py| {
-        let Ok(np) = PyModule::import_bound(py, "numpy") else {
+        let Ok(np) = PyModule::import(py, "numpy") else {
             return;
         };
-        let locals = PyDict::new_bound(py);
+        let locals = PyDict::new(py);
         if locals.set_item("np", &np).is_err() {
             return;
         }
@@ -56,16 +58,16 @@ fuzz_target!(|data: &[u8]| {
         common::ensure_len(&mut vals2, vals2_len);
         vals2.truncate(vals2_len);
 
-        if locals
-            .set_item("vals", PyList::new_bound(py, vals))
-            .is_err()
-        {
+        let Ok(vals_list) = PyList::new(py, vals) else {
+            return;
+        };
+        if locals.set_item("vals", vals_list).is_err() {
             return;
         }
-        if locals
-            .set_item("vals2", PyList::new_bound(py, vals2))
-            .is_err()
-        {
+        let Ok(vals2_list) = PyList::new(py, vals2) else {
+            return;
+        };
+        if locals.set_item("vals2", vals2_list).is_err() {
             return;
         }
         if locals.set_item("n", n).is_err()

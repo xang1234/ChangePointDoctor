@@ -264,7 +264,7 @@ impl PyDiagnostics {
     fn params_json<'py>(&self, py: Python<'py>) -> PyResult<PyObject> {
         #[cfg(feature = "serde")]
         if let Some(serialized) = &self.params_json_text {
-            let json = PyModule::import_bound(py, "json")?;
+            let json = PyModule::import(py, "json")?;
             let value = json.call_method1("loads", (serialized,))?;
             return Ok(value.into_py(py));
         }

@@ -1117,6 +1117,7 @@ mod tests {
     use pyo3::Python;
     use pyo3::exceptions::{PyRuntimeError, PyValueError};
     use pyo3::types::{PyAnyMethods, PyDict, PyDictMethods, PyList, PyModule};
+    use std::ffi::CString;
     use std::sync::Once;
 
     fn with_python<F, R>(f: F) -> R
@@ -1126,6 +1127,16 @@ mod tests {
         static INIT: Once = Once::new();
         INIT.call_once(pyo3::prepare_freethreaded_python);
         Python::with_gil(f)
+    }
+
+    fn run_python<'py>(
+        py: Python<'py>,
+        code: &str,
+        globals: Option<&pyo3::Bound<'py, PyDict>>,
+        locals: Option<&pyo3::Bound<'py, PyDict>>,
+    ) -> pyo3::PyResult<()> {
+        let code = CString::new(code).expect("python snippet should not contain NUL bytes");
+        py.run(code.as_c_str(), globals, locals)
     }
 
     #[test]
@@ -1138,7 +1149,8 @@ mod tests {
     #[test]
     fn smoke_detect_function_returns_terminal_breakpoint() {
         with_python(|py| {
-            let values = PyList::new_bound(py, [0.0, 1.0, 2.0, 3.0]);
+            let values =
+                PyList::new(py, [0.0, 1.0, 2.0, 3.0]).expect("python list should be created");
             let out = smoke_detect(values.as_any()).expect("smoke_detect should succeed");
             assert_eq!(out, vec![4]);
         });
@@ -1147,7 +1159,7 @@ mod tests {
     #[test]
     fn module_registration_exposes_public_api() {
         with_python(|py| {
-            let module = PyModule::new_bound(py, "_cpd_rs").expect("module should be created");
+            let module = PyModule::new(py, "_cpd_rs").expect("module should be created");
             _cpd_rs(&module).expect("module registration should succeed");
 
             let version_attr = module
@@ -1187,14 +1199,14 @@ mod tests {
     #[test]
     fn pelt_fit_predict_penalized_roundtrip() {
         with_python(|py| {
-            let module = PyModule::new_bound(py, "_cpd_rs").expect("module should be created");
+            let module = PyModule::new(py, "_cpd_rs").expect("module should be created");
             _cpd_rs(&module).expect("module registration should succeed");
 
-            let locals = PyDict::new_bound(py);
+            let locals = PyDict::new(py);
             locals
                 .set_item("cpd_rs", &module)
                 .expect("locals should accept module");
-            py.run_bound(
+            run_python(py,
                 "import numpy as np\nresult = cpd_rs.Pelt(model='l2').fit(np.array([0.,0.,0.,0.,0.,10.,10.,10.,10.,10.], dtype=np.float64)).predict(pen=1.0)",
                 None,
                 Some(&locals),
@@ -1217,14 +1229,14 @@ mod tests {
     #[test]
     fn pelt_predict_known_k_maps_to_knownk_stopping() {
         with_python(|py| {
-            let module = PyModule::new_bound(py, "_cpd_rs").expect("module should be created");
+            let module = PyModule::new(py, "_cpd_rs").expect("module should be created");
             _cpd_rs(&module).expect("module registration should succeed");
 
-            let locals = PyDict::new_bound(py);
+            let locals = PyDict::new(py);
             locals
                 .set_item("cpd_rs", &module)
                 .expect("locals should accept module");
-            py.run_bound(
+            run_python(py,
                 "import numpy as np\nresult = cpd_rs.Pelt(model='l2', min_segment_len=2).fit(np.array([0.,0.,0.,0.,10.,10.,10.,10.,-5.,-5.,-5.,-5.], dtype=np.float64)).predict(n_bkps=2)",
                 None,
                 Some(&locals),
@@ -1247,14 +1259,14 @@ mod tests {
     #[test]
     fn binseg_fit_predict_penalized_roundtrip() {
         with_python(|py| {
-            let module = PyModule::new_bound(py, "_cpd_rs").expect("module should be created");
+            let module = PyModule::new(py, "_cpd_rs").expect("module should be created");
             _cpd_rs(&module).expect("module registration should succeed");
 
-            let locals = PyDict::new_bound(py);
+            let locals = PyDict::new(py);
             locals
                 .set_item("cpd_rs", &module)
                 .expect("locals should accept module");
-            py.run_bound(
+            run_python(py,
                 "import numpy as np\nresult = cpd_rs.Binseg(model='l2', min_segment_len=2).fit(np.array([0.,0.,0.,0.,0.,10.,10.,10.,10.,10.], dtype=np.float64)).predict(pen=1.0)",
                 None,
                 Some(&locals),
@@ -1277,14 +1289,14 @@ mod tests {
     #[test]
     fn detect_offline_binseg_matches_class_api_for_known_k() {
         with_python(|py| {
-            let module = PyModule::new_bound(py, "_cpd_rs").expect("module should be created");
+            let module = PyModule::new(py, "_cpd_rs").expect("module should be created");
             _cpd_rs(&module).expect("module registration should succeed");
 
-            let locals = PyDict::new_bound(py);
+            let locals = PyDict::new(py);
             locals
                 .set_item("cpd_rs", &module)
                 .expect("locals should accept module");
-            py.run_bound(
+            run_python(py,
                 "import numpy as np\nx = np.array([0.,0.,0.,0.,10.,10.,10.,10.,-5.,-5.,-5.,-5.], dtype=np.float64)\nclass_result = cpd_rs.Binseg(model='l2', min_segment_len=2).fit(x).predict(n_bkps=2)\nlow_result = cpd_rs.detect_offline(x, detector='binseg', cost='l2', constraints={'min_segment_len': 2}, stopping={'n_bkps': 2}, repro_mode='balanced')",
                 None,
                 Some(&locals),
@@ -1318,14 +1330,14 @@ mod tests {
     #[cfg(not(feature = "preprocess"))]
     fn detect_offline_rejects_preprocess_without_feature() {
         with_python(|py| {
-            let module = PyModule::new_bound(py, "_cpd_rs").expect("module should be created");
+            let module = PyModule::new(py, "_cpd_rs").expect("module should be created");
             _cpd_rs(&module).expect("module registration should succeed");
 
-            let locals = PyDict::new_bound(py);
+            let locals = PyDict::new(py);
             locals
                 .set_item("cpd_rs", &module)
                 .expect("locals should accept module");
-            py.run_bound(
+            run_python(py,
                 "import numpy as np\nx = np.array([0.,0.,0.,0.,10.,10.,10.,10.], dtype=np.float64)\ntry:\n    cpd_rs.detect_offline(x, detector='pelt', cost='l2', stopping={'n_bkps': 1}, preprocess={'winsorize': {}})\n    raise AssertionError('expected preprocess feature error')\nexcept ValueError as exc:\n    assert 'preprocess feature' in str(exc)",
                 None,
                 Some(&locals),
@@ -1338,14 +1350,14 @@ mod tests {
     #[cfg(feature = "preprocess")]
     fn detect_offline_applies_preprocess_and_emits_notes() {
         with_python(|py| {
-            let module = PyModule::new_bound(py, "_cpd_rs").expect("module should be created");
+            let module = PyModule::new(py, "_cpd_rs").expect("module should be created");
             _cpd_rs(&module).expect("module registration should succeed");
 
-            let locals = PyDict::new_bound(py);
+            let locals = PyDict::new(py);
             locals
                 .set_item("cpd_rs", &module)
                 .expect("locals should accept module");
-            py.run_bound(
+            run_python(py,
                 "import numpy as np\nx = np.array([0.,0.,0.,0.,10.,10.,10.,10.], dtype=np.float64)\nresult = cpd_rs.detect_offline(x, detector='pelt', cost='l2', stopping={'n_bkps': 1}, preprocess={'winsorize': {}, 'robust_scale': {}})",
                 None,
                 Some(&locals),
@@ -1388,14 +1400,14 @@ mod tests {
     #[cfg(feature = "preprocess")]
     fn detect_offline_rejects_invalid_preprocess_shape() {
         with_python(|py| {
-            let module = PyModule::new_bound(py, "_cpd_rs").expect("module should be created");
+            let module = PyModule::new(py, "_cpd_rs").expect("module should be created");
             _cpd_rs(&module).expect("module registration should succeed");
 
-            let locals = PyDict::new_bound(py);
+            let locals = PyDict::new(py);
             locals
                 .set_item("cpd_rs", &module)
                 .expect("locals should accept module");
-            py.run_bound(
+            run_python(py,
                 "import numpy as np\nx = np.array([0.,0.,0.,0.,10.,10.,10.,10.], dtype=np.float64)\ntry:\n    cpd_rs.detect_offline(x, detector='pelt', cost='l2', stopping={'n_bkps': 1}, preprocess={'unknown_stage': {}})\n    raise AssertionError('expected unsupported preprocess key')\nexcept ValueError as exc:\n    assert \"unsupported preprocess key 'unknown_stage'\" in str(exc)\n\ntry:\n    cpd_rs.detect_offline(x, detector='pelt', cost='l2', stopping={'n_bkps': 1}, preprocess={'detrend': {'method': 'bad'}})\n    raise AssertionError('expected unsupported preprocess method')\nexcept ValueError as exc:\n    assert 'unsupported preprocess.detrend.method' in str(exc)",
                 None,
                 Some(&locals),
@@ -1426,14 +1438,14 @@ mod tests {
     #[test]
     fn pelt_rejects_invalid_predict_argument_combinations() {
         with_python(|py| {
-            let module = PyModule::new_bound(py, "_cpd_rs").expect("module should be created");
+            let module = PyModule::new(py, "_cpd_rs").expect("module should be created");
             _cpd_rs(&module).expect("module registration should succeed");
 
-            let locals = PyDict::new_bound(py);
+            let locals = PyDict::new(py);
             locals
                 .set_item("cpd_rs", &module)
                 .expect("locals should accept module");
-            py.run_bound(
+            run_python(py,
                 "import numpy as np\np = cpd_rs.Pelt(model='l2').fit(np.array([0.,0.,1.,1.], dtype=np.float64))",
                 None,
                 Some(&locals),
@@ -1445,7 +1457,7 @@ mod tests {
                 .expect("locals lookup should succeed")
                 .expect("p should exist");
 
-            let both_kwargs = PyDict::new_bound(py);
+            let both_kwargs = PyDict::new(py);
             both_kwargs
                 .set_item("pen", 1.0)
                 .expect("set pen should work");
@@ -1469,7 +1481,7 @@ mod tests {
     #[test]
     fn pelt_predict_before_fit_is_clear_error() {
         with_python(|py| {
-            let module = PyModule::new_bound(py, "_cpd_rs").expect("module should be created");
+            let module = PyModule::new(py, "_cpd_rs").expect("module should be created");
             _cpd_rs(&module).expect("module registration should succeed");
 
             let pelt = module
@@ -1478,7 +1490,7 @@ mod tests {
                 .call0()
                 .expect("constructor should succeed");
 
-            let kwargs = PyDict::new_bound(py);
+            let kwargs = PyDict::new(py);
             kwargs.set_item("pen", 1.0).expect("set pen should succeed");
             let err = pelt
                 .call_method("predict", (), Some(&kwargs))
