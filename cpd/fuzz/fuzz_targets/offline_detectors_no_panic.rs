@@ -10,7 +10,7 @@ use cpd_core::{
     MissingPolicy, OfflineDetector, TimeIndex, TimeSeriesView,
 };
 use cpd_costs::{CostL2Mean, CostNormalMeanVar};
-use cpd_offline::{BinSeg, BinSegConfig, Pelt, PeltConfig};
+use cpd_offline::{BinSeg, BinSegConfig, Pelt, PeltConfig, Wbs, WbsConfig, WbsIntervalStrategy};
 use libfuzzer_sys::fuzz_target;
 
 fn build_cache_policy(seed: u8, n: usize, d: usize) -> CachePolicy {
@@ -64,6 +64,11 @@ fuzz_target!(|data: &[u8]| {
     let params_seed = cursor.next_u8();
     let cancel_seed = cursor.next_u8();
     let time_seed = cursor.next_u8();
+    let wbs_strategy_seed = cursor.next_u8();
+    let wbs_options_seed = cursor.next_u8();
+    let wbs_num_intervals_seed = cursor.next_u8();
+    let wbs_seed_material = cursor.next_i64() as u64;
+    let wbs_cancel_seed = cursor.next_u8();
 
     let payload_len = common::bounded(cursor.next_u8(), 1, 192).saturating_mul(8);
     let candidate_len = common::bounded(cursor.next_u8(), 0, 64);
@@ -179,16 +184,36 @@ fuzz_target!(|data: &[u8]| {
     };
 
     let binseg_config = BinSegConfig {
-        stopping,
+        stopping: stopping.clone(),
         params_per_segment: usize::from((params_seed >> 1) % 5),
         cancel_check_every: usize::from(cancel_seed.wrapping_add(1)),
+    };
+
+    let wbs_config = WbsConfig {
+        stopping,
+        params_per_segment: usize::from((params_seed >> 2) % 4),
+        num_intervals: if wbs_options_seed & 1 == 0 {
+            None
+        } else {
+            Some(common::bounded(wbs_num_intervals_seed, 1, 64))
+        },
+        interval_strategy: match wbs_strategy_seed % 3 {
+            0 => WbsIntervalStrategy::Random,
+            1 => WbsIntervalStrategy::DeterministicGrid,
+            _ => WbsIntervalStrategy::Stratified,
+        },
+        seed: wbs_seed_material,
+        cancel_check_every: usize::from(wbs_cancel_seed % 8),
     };
 
     if options_seed & 1 == 0 {
         if let Ok(detector) = Pelt::new(CostL2Mean::default(), pelt_config.clone()) {
             let _ = detector.detect(&view, &ctx);
         }
-        if let Ok(detector) = BinSeg::new(CostL2Mean::default(), binseg_config) {
+        if let Ok(detector) = BinSeg::new(CostL2Mean::default(), binseg_config.clone()) {
+            let _ = detector.detect(&view, &ctx);
+        }
+        if let Ok(detector) = Wbs::new(CostL2Mean::default(), wbs_config.clone()) {
             let _ = detector.detect(&view, &ctx);
         }
     } else {
@@ -196,6 +221,9 @@ fuzz_target!(|data: &[u8]| {
             let _ = detector.detect(&view, &ctx);
         }
         if let Ok(detector) = BinSeg::new(CostNormalMeanVar::default(), binseg_config) {
+            let _ = detector.detect(&view, &ctx);
+        }
+        if let Ok(detector) = Wbs::new(CostNormalMeanVar::default(), wbs_config) {
             let _ = detector.detect(&view, &ctx);
         }
     }

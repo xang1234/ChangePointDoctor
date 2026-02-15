@@ -13,6 +13,12 @@ Current targets:
 - `offline_detectors_no_panic`
 - `numpy_interop_no_panic`
 
+`offline_detectors_no_panic` currently exercises offline detector paths for:
+
+- `Pelt`
+- `BinSeg`
+- `Wbs`
+
 ## Local Setup
 
 ```bash
