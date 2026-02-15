@@ -14,18 +14,6 @@ const REL_TOL: f64 = 1e-6;
 const VAR_FLOOR: f64 = f64::EPSILON * 1e6;
 const MIN_PROPTEST_CASES: u32 = 1000;
 const LOG_2PI: f64 = 1.8378770664093453;
-const LANCZOS_G: f64 = 7.0;
-const LANCZOS_COEFFICIENTS: [f64; 9] = [
-    0.999_999_999_999_809_9,
-    676.520_368_121_885_1,
-    -1_259.139_216_722_402_8,
-    771.323_428_777_653_1,
-    -176.615_029_162_140_6,
-    12.507_343_278_686_905,
-    -0.138_571_095_265_720_12,
-    9.984_369_578_019_572e-6,
-    1.505_632_735_149_311_7e-7,
-];
 
 fn proptest_cases() -> u32 {
     std::env::var("PROPTEST_CASES")
@@ -87,19 +75,21 @@ fn normalize_variance(raw_var: f64) -> f64 {
     }
 }
 
-fn ln_gamma(z: f64) -> f64 {
-    if z < 0.5 {
-        let sin_term = (std::f64::consts::PI * z).sin().abs();
-        return std::f64::consts::PI.ln() - sin_term.ln() - ln_gamma(1.0 - z);
-    }
+fn log_factorial(n: usize) -> f64 {
+    (2..=n).map(|v| (v as f64).ln()).sum()
+}
 
-    let shifted = z - 1.0;
-    let mut x = LANCZOS_COEFFICIENTS[0];
-    for (idx, coefficient) in LANCZOS_COEFFICIENTS.iter().copied().enumerate().skip(1) {
-        x += coefficient / (shifted + idx as f64);
+fn ln_gamma_for_default_prior_alpha(segment_len: usize) -> f64 {
+    if segment_len.is_multiple_of(2) {
+        // alpha_n = 1 + n/2 = integer.
+        let alpha_integer = 1 + segment_len / 2;
+        log_factorial(alpha_integer.saturating_sub(1))
+    } else {
+        // alpha_n = 1 + n/2 = k + 1/2 with k = (n + 1)/2.
+        let k = segment_len.div_ceil(2);
+        log_factorial(2 * k) - (k as f64) * 4.0_f64.ln() - log_factorial(k)
+            + 0.5 * std::f64::consts::PI.ln()
     }
-    let t = shifted + LANCZOS_G + 0.5;
-    0.5 * LOG_2PI + (shifted + 0.5) * t.ln() - t + x.ln()
 }
 
 fn naive_normal(values: &[f64], start: usize, end: usize) -> f64 {
@@ -113,9 +103,11 @@ fn naive_normal(values: &[f64], start: usize, end: usize) -> f64 {
     len * var.ln()
 }
 
-fn naive_nig(values: &[f64], start: usize, end: usize, prior: NIGPrior) -> f64 {
+fn naive_nig_default_prior(values: &[f64], start: usize, end: usize) -> f64 {
+    let prior = NIGPrior::weakly_informative();
     let segment = &values[start..end];
     let n = segment.len() as f64;
+    let n_usize = segment.len();
     let mean = segment.iter().sum::<f64>() / n;
     let sse = segment
         .iter()
@@ -129,8 +121,7 @@ fn naive_nig(values: &[f64], start: usize, end: usize, prior: NIGPrior) -> f64 {
     let beta_n = prior.beta0
         + 0.5 * sse
         + (prior.kappa0 * n * (mean - prior.mu0) * (mean - prior.mu0)) / (2.0 * kappa_n);
-    let log_marginal = (ln_gamma(alpha_n) - ln_gamma(prior.alpha0))
-        + prior.alpha0 * prior.beta0.ln()
+    let log_marginal = ln_gamma_for_default_prior_alpha(n_usize) + prior.alpha0 * prior.beta0.ln()
         - alpha_n * beta_n.ln()
         + 0.5 * (prior.kappa0.ln() - kappa_n.ln())
         - 0.5 * n * LOG_2PI;
@@ -155,9 +146,17 @@ fn normal_segment_cost(values: &[f64], n: usize, d: usize, start: usize, end: us
     model.segment_cost(&cache, start, end)
 }
 
-fn nig_segment_cost(values: &[f64], n: usize, d: usize, start: usize, end: usize) -> f64 {
+fn nig_segment_cost_with_prior(
+    values: &[f64],
+    n: usize,
+    d: usize,
+    start: usize,
+    end: usize,
+    prior: NIGPrior,
+) -> f64 {
     let view = make_f64_view(values, n, d, MissingPolicy::Error).expect("view should be valid");
-    let model = CostNIGMarginal::new(ReproMode::Balanced);
+    let model =
+        CostNIGMarginal::with_prior(prior, ReproMode::Balanced).expect("prior should be valid");
     let cache = model
         .precompute(&view, &CachePolicy::Full)
         .expect("precompute should succeed for valid data");
@@ -351,7 +350,7 @@ proptest! {
 
         let actual_first = model.segment_cost(&cache, start, end);
         let actual_second = model.segment_cost(&cache, start, end);
-        let expected = naive_nig(&values, start, end, model.prior);
+        let expected = naive_nig_default_prior(&values, start, end);
 
         prop_assert!(relative_close(actual_first, expected));
         prop_assert!(relative_close(actual_first, actual_second));
@@ -438,14 +437,20 @@ proptest! {
     }
 
     #[test]
-    fn nig_segment_cost_is_shift_sensitive_under_nonzero_prior_mean(
+    fn nig_segment_cost_with_nonzero_prior_mean_remains_finite_under_shift(
         (values, start, end) in univariate_segment_case_strategy(1),
         shift in -50.0f64..50.0,
     ) {
         let n = values.len();
         let shifted: Vec<f64> = values.iter().map(|value| value + shift).collect();
-        let base = nig_segment_cost(&values, n, 1, start, end);
-        let shifted_cost = nig_segment_cost(&shifted, n, 1, start, end);
+        let prior = NIGPrior {
+            mu0: 3.0,
+            kappa0: 0.01,
+            alpha0: 1.0,
+            beta0: 1.0,
+        };
+        let base = nig_segment_cost_with_prior(&values, n, 1, start, end, prior);
+        let shifted_cost = nig_segment_cost_with_prior(&shifted, n, 1, start, end, prior);
         prop_assert!(base.is_finite());
         prop_assert!(shifted_cost.is_finite());
     }

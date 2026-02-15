@@ -272,11 +272,14 @@ fn ln_gamma(z: f64) -> f64 {
         "ln_gamma requires z > 0 and finite"
     );
 
+    // Avoid reflection-instability for tiny positive z where sin(pi*z) can underflow.
+    // ln Γ(z) = -ln(z) + O(z) as z -> 0+.
+    if z < 1e-8 {
+        return -z.ln();
+    }
+
     if z < 0.5 {
         let sin_term = (std::f64::consts::PI * z).sin().abs();
-        if sin_term <= f64::MIN_POSITIVE {
-            return f64::INFINITY;
-        }
         return std::f64::consts::PI.ln() - sin_term.ln() - ln_gamma(1.0 - z);
     }
 
@@ -587,6 +590,9 @@ mod tests {
         assert_close(ln_gamma(1.0), 0.0, 1e-14);
         assert_close(ln_gamma(0.5), 0.5 * std::f64::consts::PI.ln(), 1e-12);
         assert_close(ln_gamma(5.0), 24.0_f64.ln(), 1e-12);
+        let tiny = 1.0e-320;
+        assert!(ln_gamma(tiny).is_finite());
+        assert_close(ln_gamma(tiny), -tiny.ln(), 1e-10);
     }
 
     #[test]
@@ -869,6 +875,73 @@ mod tests {
             (nig_gain - normal_gain).abs() > 1e-9,
             "cost gains should not be identical"
         );
+    }
+
+    #[test]
+    fn nonzero_prior_mean_changes_shifted_cost() {
+        let prior = NIGPrior {
+            mu0: 5.0,
+            kappa0: 0.01,
+            alpha0: 1.0,
+            beta0: 1.0,
+        };
+        let model =
+            CostNIGMarginal::with_prior(prior, ReproMode::Balanced).expect("prior should be valid");
+        let values = vec![0.0, 1.0, 2.0, 3.0, 4.0];
+        let shifted: Vec<f64> = values.iter().map(|v| v + 1.5).collect();
+
+        let view = make_f64_view(
+            &values,
+            values.len(),
+            1,
+            MemoryLayout::CContiguous,
+            MissingPolicy::Error,
+        );
+        let shifted_view = make_f64_view(
+            &shifted,
+            shifted.len(),
+            1,
+            MemoryLayout::CContiguous,
+            MissingPolicy::Error,
+        );
+        let cache = model
+            .precompute(&view, &CachePolicy::Full)
+            .expect("precompute should succeed");
+        let shifted_cache = model
+            .precompute(&shifted_view, &CachePolicy::Full)
+            .expect("shifted precompute should succeed");
+
+        let base = model.segment_cost(&cache, 0, values.len());
+        let shifted_cost = model.segment_cost(&shifted_cache, 0, shifted.len());
+        assert!(
+            (base - shifted_cost).abs() > 1e-6,
+            "expected nonzero prior mean to be shift-sensitive"
+        );
+    }
+
+    #[test]
+    fn tiny_positive_alpha_prior_produces_finite_cost() {
+        let prior = NIGPrior {
+            mu0: 0.0,
+            kappa0: 0.01,
+            alpha0: 1.0e-320,
+            beta0: 1.0,
+        };
+        let model = CostNIGMarginal::with_prior(prior, ReproMode::Balanced)
+            .expect("tiny positive alpha should validate");
+        let values = vec![1.0, 2.0, 3.0];
+        let view = make_f64_view(
+            &values,
+            values.len(),
+            1,
+            MemoryLayout::CContiguous,
+            MissingPolicy::Error,
+        );
+        let cache = model
+            .precompute(&view, &CachePolicy::Full)
+            .expect("precompute should succeed");
+        let cost = model.segment_cost(&cache, 0, values.len());
+        assert!(cost.is_finite());
     }
 
     #[test]
