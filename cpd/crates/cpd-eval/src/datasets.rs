@@ -13,6 +13,7 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 const MANIFEST_JSON: &str = include_str!("../datasets/registry_manifest.v1.json");
 const MANIFEST_VERSION: u32 = 1;
@@ -23,7 +24,7 @@ const MANIFEST_VERSION: u32 = 1;
 pub enum DatasetKind {
     /// Deterministic synthetic dataset generated from a fixed seed.
     Synthetic,
-    /// Real-world public benchmark slice with license attribution metadata.
+    /// Public benchmark dataset (or benchmark-derived fixture) with attribution metadata.
     RealWorld,
 }
 
@@ -40,6 +41,7 @@ pub struct DatasetMetadata {
     pub license: Option<String>,
     pub source_url: Option<String>,
     pub citation: Option<String>,
+    pub benchmark_derivative: bool,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -62,6 +64,8 @@ struct ManifestEntry {
     source_url: Option<String>,
     #[serde(default)]
     citation: Option<String>,
+    #[serde(default)]
+    benchmark_derivative: bool,
     #[serde(default)]
     synthetic: Option<SyntheticSpec>,
     #[serde(default)]
@@ -180,7 +184,7 @@ pub fn list_datasets() -> Result<Vec<DatasetMetadata>, CpdError> {
 /// Loading is lazy: the first load generates/reads and caches a local JSON copy,
 /// and subsequent loads read from cache.
 pub fn load_dataset(name: &str) -> Result<(Vec<f64>, DatasetMetadata), CpdError> {
-    let cache_root = default_cache_root()?;
+    let cache_root = default_cache_root();
     load_dataset_with_cache_root(name, cache_root.as_path())
 }
 
@@ -235,8 +239,10 @@ fn try_read_cache(
 
     let raw = fs::read_to_string(cache_path)
         .map_err(|err| io_error("failed to read cache file", cache_path, err))?;
-    let cached: CachedDataset = serde_json::from_str(raw.as_str())
-        .map_err(|_| CpdError::invalid_input("cache file is not valid JSON".to_string()))?;
+    let cached: CachedDataset = match serde_json::from_str(raw.as_str()) {
+        Ok(parsed) => parsed,
+        Err(_) => return Ok(None),
+    };
     if validate_cached_dataset(entry, &cached).is_err() {
         return Ok(None);
     }
@@ -282,33 +288,102 @@ fn validate_cached_dataset(entry: &ManifestEntry, cached: &CachedDataset) -> Res
         )));
     }
 
+    match entry.kind {
+        DatasetKind::Synthetic => {
+            let expected_change_points = entry.synthetic_spec()?.expected_change_points()?;
+            if cached.true_change_points != expected_change_points {
+                return Err(CpdError::invalid_input(format!(
+                    "cache true_change_points mismatch for '{}'",
+                    entry.name
+                )));
+            }
+        }
+        DatasetKind::RealWorld => {
+            if !cached.true_change_points.is_empty() {
+                return Err(CpdError::invalid_input(format!(
+                    "cache true_change_points must be empty for real-world dataset '{}'",
+                    entry.name
+                )));
+            }
+        }
+    }
+
     Ok(())
 }
 
 fn write_cache(cache_path: &Path, cached: &CachedDataset) -> Result<(), CpdError> {
     let encoded = serde_json::to_vec_pretty(cached)
         .map_err(|err| CpdError::invalid_input(format!("failed to encode cache JSON: {err}")))?;
-    fs::write(cache_path, encoded)
-        .map_err(|err| io_error("failed to write cache file", cache_path, err))
+    let parent = cache_path.parent().ok_or_else(|| {
+        CpdError::resource_limit(format!(
+            "failed to determine parent directory for cache path '{}'",
+            cache_path.display()
+        ))
+    })?;
+    let tmp_name = format!(
+        ".{}.tmp-{}-{}",
+        cache_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("dataset-cache"),
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    );
+    let tmp_path = parent.join(tmp_name);
+
+    fs::write(tmp_path.as_path(), encoded).map_err(|err| {
+        io_error(
+            "failed to write temporary cache file",
+            tmp_path.as_path(),
+            err,
+        )
+    })?;
+    match fs::rename(tmp_path.as_path(), cache_path) {
+        Ok(()) => Ok(()),
+        Err(_rename_err) if cache_path.exists() => {
+            let _ = fs::remove_file(tmp_path.as_path());
+            // Another process may have written the final cache file first.
+            Ok(())
+        }
+        Err(rename_err) => {
+            let _ = fs::remove_file(tmp_path.as_path());
+            Err(io_error(
+                "failed to atomically replace cache file",
+                cache_path,
+                rename_err,
+            ))
+        }
+    }
 }
 
-fn default_cache_root() -> Result<PathBuf, CpdError> {
-    if let Ok(path) = env::var("CPD_EVAL_DATASET_CACHE_DIR") {
-        return Ok(PathBuf::from(path));
+fn default_cache_root() -> PathBuf {
+    if let Some(path) = non_empty_env_path("CPD_EVAL_DATASET_CACHE_DIR") {
+        return path;
     }
-    if let Ok(path) = env::var("XDG_CACHE_HOME") {
-        return Ok(PathBuf::from(path).join("cpd-eval").join("datasets"));
+    if let Some(path) = non_empty_env_path("XDG_CACHE_HOME") {
+        return path.join("cpd-eval").join("datasets");
     }
-    if let Ok(path) = env::var("HOME") {
-        return Ok(PathBuf::from(path)
-            .join(".cache")
-            .join("cpd-eval")
-            .join("datasets"));
+    if let Some(path) = non_empty_env_path("LOCALAPPDATA") {
+        return path.join("cpd-eval").join("datasets");
+    }
+    if let Some(path) = non_empty_env_path("APPDATA") {
+        return path.join("cpd-eval").join("datasets");
+    }
+    if let Some(path) = non_empty_env_path("HOME") {
+        return path.join(".cache").join("cpd-eval").join("datasets");
     }
 
-    Err(CpdError::resource_limit(
-        "unable to resolve cache directory; set CPD_EVAL_DATASET_CACHE_DIR".to_string(),
-    ))
+    env::temp_dir().join("cpd-eval").join("datasets")
+}
+
+fn non_empty_env_path(key: &str) -> Option<PathBuf> {
+    env::var(key)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .map(PathBuf::from)
 }
 
 fn manifest() -> Result<&'static Manifest, CpdError> {
@@ -392,6 +467,17 @@ fn validate_manifest(manifest: &Manifest) -> Result<(), CpdError> {
                     entry.name.as_str(),
                 )?;
                 require_non_empty(entry.citation.as_deref(), "citation", entry.name.as_str())?;
+                if entry.benchmark_derivative
+                    && !entry
+                        .description
+                        .to_ascii_lowercase()
+                        .contains("derivative")
+                {
+                    return Err(CpdError::invalid_input(format!(
+                        "dataset '{}' is marked benchmark_derivative but description does not mention derivative provenance",
+                        entry.name
+                    )));
+                }
                 if entry.synthetic.is_some() {
                     return Err(CpdError::invalid_input(format!(
                         "dataset '{}' cannot define synthetic config for real_world kind",
@@ -455,6 +541,7 @@ impl ManifestEntry {
             license: self.license.clone(),
             source_url: self.source_url.clone(),
             citation: self.citation.clone(),
+            benchmark_derivative: self.benchmark_derivative,
         })
     }
 
@@ -473,6 +560,7 @@ impl ManifestEntry {
             license: self.license.clone(),
             source_url: self.source_url.clone(),
             citation: self.citation.clone(),
+            benchmark_derivative: self.benchmark_derivative,
         }
     }
 
@@ -720,6 +808,23 @@ mod tests {
         path
     }
 
+    fn assert_vec_approx_eq(left: &[f64], right: &[f64]) {
+        assert_eq!(
+            left.len(),
+            right.len(),
+            "vector lengths differ: {} vs {}",
+            left.len(),
+            right.len()
+        );
+        for (index, (&lhs, &rhs)) in left.iter().zip(right.iter()).enumerate() {
+            let delta = (lhs - rhs).abs();
+            assert!(
+                delta <= 1e-12,
+                "vectors differ at index {index}: left={lhs}, right={rhs}, delta={delta}"
+            );
+        }
+    }
+
     #[test]
     fn manifest_meets_minimum_dataset_counts() {
         let datasets = list_datasets().expect("dataset list should load");
@@ -809,6 +914,84 @@ mod tests {
     }
 
     #[test]
+    fn malformed_cache_file_is_ignored_and_rebuilt() {
+        let cache_root = unique_cache_root("malformed");
+        let dataset_name = list_datasets()
+            .expect("dataset list should load")
+            .into_iter()
+            .find(|dataset| dataset.kind == DatasetKind::Synthetic)
+            .expect("manifest should include synthetic datasets")
+            .name;
+
+        let (first_values, first_metadata) =
+            load_dataset_with_cache_root(dataset_name.as_str(), cache_root.as_path())
+                .expect("first synthetic load should succeed");
+        let path = cache_path(cache_root.as_path(), dataset_name.as_str());
+        fs::write(path.as_path(), b"{not valid json")
+            .expect("malformed cache bytes should be writable");
+
+        let (second_values, second_metadata) =
+            load_dataset_with_cache_root(dataset_name.as_str(), cache_root.as_path())
+                .expect("second synthetic load should rebuild cache");
+        assert_vec_approx_eq(&second_values, &first_values);
+        assert_eq!(
+            second_metadata.true_change_points,
+            first_metadata.true_change_points
+        );
+
+        let rebuilt: CachedDataset = serde_json::from_str(
+            fs::read_to_string(path.as_path())
+                .expect("rebuilt cache should be readable")
+                .as_str(),
+        )
+        .expect("rebuilt cache should be valid JSON");
+        assert_vec_approx_eq(&rebuilt.values, &second_values);
+
+        fs::remove_dir_all(cache_root).expect("temp cache root should be removable");
+    }
+
+    #[test]
+    fn synthetic_cache_with_invalid_true_change_points_is_regenerated() {
+        let cache_root = unique_cache_root("invalid-ground-truth");
+        let dataset_name = list_datasets()
+            .expect("dataset list should load")
+            .into_iter()
+            .find(|dataset| dataset.kind == DatasetKind::Synthetic)
+            .expect("manifest should include synthetic datasets")
+            .name;
+
+        let (first_values, first_metadata) =
+            load_dataset_with_cache_root(dataset_name.as_str(), cache_root.as_path())
+                .expect("first synthetic load should succeed");
+        let path = cache_path(cache_root.as_path(), dataset_name.as_str());
+
+        let mut cached: CachedDataset = serde_json::from_str(
+            fs::read_to_string(path.as_path())
+                .expect("cache should be readable")
+                .as_str(),
+        )
+        .expect("cache JSON should parse");
+        cached.values[0] = first_values[0] + 5678.0;
+        cached.true_change_points = vec![1];
+        fs::write(
+            path.as_path(),
+            serde_json::to_vec_pretty(&cached).expect("cache should serialize"),
+        )
+        .expect("cache should be writable");
+
+        let (second_values, second_metadata) =
+            load_dataset_with_cache_root(dataset_name.as_str(), cache_root.as_path())
+                .expect("invalid synthetic cache should be ignored and rebuilt");
+        assert_vec_approx_eq(&second_values, &first_values);
+        assert_eq!(
+            second_metadata.true_change_points,
+            first_metadata.true_change_points
+        );
+
+        fs::remove_dir_all(cache_root).expect("temp cache root should be removable");
+    }
+
+    #[test]
     fn real_world_dataset_reads_from_cache_after_first_load() {
         let cache_root = unique_cache_root("real-world");
         let dataset_name = list_datasets()
@@ -844,6 +1027,26 @@ mod tests {
         assert_eq!(second_values[0], sentinel);
 
         fs::remove_dir_all(cache_root).expect("temp cache root should be removable");
+    }
+
+    #[test]
+    fn benchmark_derivative_metadata_is_exposed_for_real_world_slices() {
+        let datasets = list_datasets().expect("dataset list should load");
+        let real_world = datasets
+            .iter()
+            .filter(|dataset| dataset.kind == DatasetKind::RealWorld)
+            .collect::<Vec<_>>();
+
+        assert!(
+            !real_world.is_empty(),
+            "manifest should include real-world entries"
+        );
+        assert!(
+            real_world
+                .iter()
+                .all(|dataset| dataset.benchmark_derivative),
+            "all shipped real-world entries are benchmark derivatives and should say so"
+        );
     }
 
     #[test]

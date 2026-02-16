@@ -180,12 +180,13 @@
       "name": "real_world_public_slice_01",
       "display_name": "Public Benchmark Slice 01",
       "kind": "real_world",
-      "description": "Public benchmark-inspired mean-shift slice (vendored for CI).",
+      "description": "Public benchmark-inspired synthetic derivative mean-shift slice (vendored for CI).",
       "length": 30,
       "dimensions": 1,
       "license": "CC-BY-compatible synthetic derivative",
       "source_url": "https://centre-borelli.github.io/ruptures-docs/",
       "citation": "Truong, C., Oudre, L., Vayatis, N. (2020). Selective review of offline change point detection methods. Signal Processing, 167, 107299.",
+      "benchmark_derivative": true,
       "real_world": {
         "fixture_path": "python/tests/fixtures/parity/real_world/public_benchmark_slice_01.json"
       }
@@ -194,12 +195,13 @@
       "name": "real_world_public_slice_02",
       "display_name": "Public Benchmark Slice 02",
       "kind": "real_world",
-      "description": "Public benchmark-inspired mean-shift slice (vendored for CI).",
+      "description": "Public benchmark-inspired synthetic derivative mean-shift slice (vendored for CI).",
       "length": 30,
       "dimensions": 1,
       "license": "CC-BY-compatible synthetic derivative",
       "source_url": "https://centre-borelli.github.io/ruptures-docs/",
       "citation": "Truong, C., Oudre, L., Vayatis, N. (2020). Selective review of offline change point detection methods. Signal Processing, 167, 107299.",
+      "benchmark_derivative": true,
       "real_world": {
         "fixture_path": "python/tests/fixtures/parity/real_world/public_benchmark_slice_02.json"
       }
@@ -208,12 +210,13 @@
       "name": "real_world_public_slice_03",
       "display_name": "Public Benchmark Slice 03",
       "kind": "real_world",
-      "description": "Public benchmark-inspired trend-break slice (vendored for CI).",
+      "description": "Public benchmark-inspired synthetic derivative trend-break slice (vendored for CI).",
       "length": 30,
       "dimensions": 1,
       "license": "CC-BY-compatible synthetic derivative",
       "source_url": "https://centre-borelli.github.io/ruptures-docs/",
       "citation": "Truong, C., Oudre, L., Vayatis, N. (2020). Selective review of offline change point detection methods. Signal Processing, 167, 107299.",
+      "benchmark_derivative": true,
       "real_world": {
         "fixture_path": "python/tests/fixtures/parity/real_world/public_benchmark_slice_03.json"
       }
@@ -222,12 +225,13 @@
       "name": "real_world_public_slice_04",
       "display_name": "Public Benchmark Slice 04",
       "kind": "real_world",
-      "description": "Public benchmark-inspired trend-break slice (vendored for CI).",
+      "description": "Public benchmark-inspired synthetic derivative trend-break slice (vendored for CI).",
       "length": 30,
       "dimensions": 1,
       "license": "CC-BY-compatible synthetic derivative",
       "source_url": "https://centre-borelli.github.io/ruptures-docs/",
       "citation": "Truong, C., Oudre, L., Vayatis, N. (2020). Selective review of offline change point detection methods. Signal Processing, 167, 107299.",
+      "benchmark_derivative": true,
       "real_world": {
         "fixture_path": "python/tests/fixtures/parity/real_world/public_benchmark_slice_04.json"
       }
@@ -236,12 +240,13 @@
       "name": "real_world_public_slice_05",
       "display_name": "Public Benchmark Slice 05",
       "kind": "real_world",
-      "description": "Public benchmark-inspired heteroskedastic slice (vendored for CI).",
+      "description": "Public benchmark-inspired synthetic derivative heteroskedastic slice (vendored for CI).",
       "length": 30,
       "dimensions": 1,
       "license": "CC-BY-compatible synthetic derivative",
       "source_url": "https://centre-borelli.github.io/ruptures-docs/",
       "citation": "Truong, C., Oudre, L., Vayatis, N. (2020). Selective review of offline change point detection methods. Signal Processing, 167, 107299.",
+      "benchmark_derivative": true,
       "real_world": {
         "fixture_path": "python/tests/fixtures/parity/real_world/public_benchmark_slice_05.json"
       }
