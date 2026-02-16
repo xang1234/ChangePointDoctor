@@ -2,6 +2,12 @@
 
 #![forbid(unsafe_code)]
 
+pub mod diagnostics;
+pub use diagnostics::{
+    DiagnosticsReport, DiagnosticsSummary, DimensionDiagnostics, DoctorDiagnosticsConfig,
+    DominantPeriodHint, MissingPattern, compute_diagnostics,
+};
+
 #[cfg(feature = "preprocess")]
 use cpd_core::{CpdError, DTypeView, MemoryLayout, TimeSeriesView};
 #[cfg(feature = "preprocess")]
