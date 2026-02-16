@@ -2,7 +2,9 @@
 
 #![forbid(unsafe_code)]
 
-use cpd_core::{segments_from_breakpoints, CpdError, OfflineChangePointResult, OnlineStepResult};
+use cpd_core::{CpdError, OfflineChangePointResult, OnlineStepResult, segments_from_breakpoints};
+
+pub mod synthetic;
 
 /// Precision/recall/F1 summary for tolerance-based matching.
 #[derive(Clone, Debug, PartialEq)]
@@ -888,9 +890,10 @@ mod tests {
         let steps = vec![step(0, 0.1, false), step(1, 0.2, true)];
 
         let err = online_metrics(&steps, &[4, 2]).expect_err("unsorted change points should fail");
-        assert!(err
-            .to_string()
-            .contains("true_change_points must be strictly increasing"));
+        assert!(
+            err.to_string()
+                .contains("true_change_points must be strictly increasing")
+        );
     }
 
     #[test]
@@ -898,8 +901,9 @@ mod tests {
         let steps = vec![step(0, 0.1, false), step(0, 0.2, true)];
 
         let err = online_metrics(&steps, &[0]).expect_err("non-monotonic times should fail");
-        assert!(err
-            .to_string()
-            .contains("OnlineStepResult::t must be strictly increasing"));
+        assert!(
+            err.to_string()
+                .contains("OnlineStepResult::t must be strictly increasing")
+        );
     }
 }
