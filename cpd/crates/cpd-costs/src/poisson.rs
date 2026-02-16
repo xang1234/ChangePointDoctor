@@ -9,6 +9,7 @@ use cpd_core::{
 };
 
 const INTEGER_TOL: f64 = 1e-9;
+const PREFIX_MONOTONIC_ULPS: f64 = 64.0;
 
 /// Poisson segment cost model for count/rate changes.
 ///
@@ -180,6 +181,39 @@ fn normalize_count(value: f64, t: usize, dim: usize) -> Result<f64, CpdError> {
     Ok(rounded)
 }
 
+fn sum_tolerance(left: f64, right: f64) -> f64 {
+    let scale = left.abs().max(right.abs()).max(1.0);
+    PREFIX_MONOTONIC_ULPS * f64::EPSILON * scale
+}
+
+fn validate_prefix_sum(prefix: &[f64], dim: usize) -> Result<(), CpdError> {
+    if prefix.is_empty() || !prefix[0].is_finite() {
+        return Err(CpdError::numerical_issue(format!(
+            "CostPoissonRate prefix sums invalid at dim={dim}: missing or non-finite initial value"
+        )));
+    }
+
+    let mut prev = prefix[0];
+    for (idx, curr) in prefix.iter().copied().enumerate().skip(1) {
+        if !curr.is_finite() {
+            return Err(CpdError::numerical_issue(format!(
+                "CostPoissonRate prefix sums became non-finite at dim={dim}, prefix_idx={idx}"
+            )));
+        }
+
+        let tol = sum_tolerance(prev, curr);
+        if curr + tol < prev {
+            return Err(CpdError::numerical_issue(format!(
+                "CostPoissonRate prefix sums became non-monotonic at dim={dim}, prefix_idx={idx}: prev={prev}, curr={curr}, tol={tol}"
+            )));
+        }
+
+        prev = curr;
+    }
+
+    Ok(())
+}
+
 fn read_count(x: &TimeSeriesView<'_>, t: usize, dim: usize) -> Result<f64, CpdError> {
     normalize_count(read_value(x, t, dim)?, t, dim)
 }
@@ -277,6 +311,7 @@ impl CostModel for CostPoissonRate {
             };
 
             debug_assert_eq!(dim_prefix_sum.len(), prefix_len_per_dim);
+            validate_prefix_sum(&dim_prefix_sum, dim)?;
             prefix_sum.extend_from_slice(&dim_prefix_sum);
         }
 
@@ -323,8 +358,19 @@ impl CostModel for CostPoissonRate {
 
         for dim in 0..cache.d {
             let base = cache.dim_offset(dim);
-            let sum = cache.prefix_sum[base + end] - cache.prefix_sum[base + start];
-            if sum <= 0.0 {
+            let prefix_end = cache.prefix_sum[base + end];
+            let prefix_start = cache.prefix_sum[base + start];
+            let raw_sum = prefix_end - prefix_start;
+            let sum = if raw_sum >= 0.0 {
+                raw_sum
+            } else {
+                let tol = sum_tolerance(prefix_end, prefix_start);
+                if raw_sum < -tol {
+                    return f64::INFINITY;
+                }
+                0.0
+            };
+            if sum == 0.0 {
                 continue;
             }
             let lambda = sum / m;
@@ -337,7 +383,10 @@ impl CostModel for CostPoissonRate {
 
 #[cfg(test)]
 mod tests {
-    use super::{CostPoissonRate, INTEGER_TOL, PoissonCache, cache_overflow_err, read_value};
+    use super::{
+        CostPoissonRate, INTEGER_TOL, PoissonCache, cache_overflow_err, read_value,
+        validate_prefix_sum,
+    };
     use crate::model::CostModel;
     use cpd_core::{
         CachePolicy, CpdError, DTypeView, MemoryLayout, MissingPolicy, MissingSupport, ReproMode,
@@ -436,6 +485,21 @@ mod tests {
         let err = cache_overflow_err(7, 11);
         assert!(matches!(err, CpdError::ResourceLimit(_)));
         assert!(err.to_string().contains("n=7, d=11"));
+    }
+
+    #[test]
+    fn validate_prefix_sum_rejects_non_finite_and_non_monotonic_sequences() {
+        let non_finite = vec![0.0, 1.0, f64::INFINITY];
+        let err_non_finite =
+            validate_prefix_sum(&non_finite, 0).expect_err("non-finite prefix should fail");
+        assert!(matches!(err_non_finite, CpdError::NumericalIssue(_)));
+        assert!(err_non_finite.to_string().contains("non-finite"));
+
+        let non_monotonic = vec![0.0, 2.0, 1.0];
+        let err_non_monotonic =
+            validate_prefix_sum(&non_monotonic, 0).expect_err("non-monotonic prefix should fail");
+        assert!(matches!(err_non_monotonic, CpdError::NumericalIssue(_)));
+        assert!(err_non_monotonic.to_string().contains("non-monotonic"));
     }
 
     #[test]
@@ -702,6 +766,24 @@ mod tests {
     }
 
     #[test]
+    fn precompute_rejects_non_finite_prefix_totals() {
+        let model = CostPoissonRate::default();
+        let values = [f64::MAX, f64::MAX];
+        let view = make_f64_view(
+            &values,
+            2,
+            1,
+            MemoryLayout::CContiguous,
+            MissingPolicy::Error,
+        );
+        let err = model
+            .precompute(&view, &CachePolicy::Full)
+            .expect_err("overflowed prefix sums should fail");
+        assert!(matches!(err, CpdError::NumericalIssue(_)));
+        assert!(err.to_string().contains("non-finite"));
+    }
+
+    #[test]
     fn worst_case_cache_bytes_matches_formula() {
         let model = CostPoissonRate::default();
         let values = vec![0.0; 16];
@@ -773,6 +855,22 @@ mod tests {
 
         let panic = std::panic::catch_unwind(|| model.segment_cost(&cache, 0, 3));
         assert!(panic.is_err(), "expected panic for end > n");
+    }
+
+    #[test]
+    fn segment_cost_returns_infinity_for_materially_negative_segment_sum() {
+        let model = CostPoissonRate::default();
+        let cache = PoissonCache {
+            prefix_sum: vec![0.0, 100.0, 10.0],
+            n: 2,
+            d: 1,
+        };
+
+        let cost = model.segment_cost(&cache, 1, 2);
+        assert!(
+            cost.is_infinite() && cost.is_sign_positive(),
+            "expected +inf for materially negative segment sum, got {cost}"
+        );
     }
 
     #[test]
