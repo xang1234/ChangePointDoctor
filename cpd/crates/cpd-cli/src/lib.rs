@@ -37,6 +37,8 @@ pub fn crate_name() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::run_pipeline;
+    #[cfg(feature = "serde")]
+    use super::run_pipeline_json;
     use cpd_core::{Constraints, MemoryLayout, MissingPolicy, Stopping, TimeIndex, TimeSeriesView};
     use cpd_doctor::{CostConfig, DetectorConfig, OfflineDetectorConfig, PipelineSpec};
 
@@ -57,9 +59,13 @@ mod tests {
     fn run_pipeline_executes_valid_spec() {
         let values = vec![0.0, 0.0, 0.0, 7.0, 7.0, 7.0, -2.0, -2.0, -2.0];
         let view = univariate(&values);
+        let stopping = Stopping::KnownK(2);
         let pipeline = PipelineSpec {
             detector: DetectorConfig::Offline(OfflineDetectorConfig::Pelt(
-                cpd_offline::PeltConfig::default(),
+                cpd_offline::PeltConfig {
+                    stopping: stopping.clone(),
+                    ..cpd_offline::PeltConfig::default()
+                },
             )),
             cost: CostConfig::L2,
             preprocess: None,
@@ -67,11 +73,39 @@ mod tests {
                 min_segment_len: 2,
                 ..Constraints::default()
             },
-            stopping: Some(Stopping::KnownK(2)),
+            stopping: Some(stopping),
             seed: None,
         };
 
         let result = run_pipeline(&view, &pipeline).expect("pipeline should execute");
+        assert_eq!(result.breakpoints, vec![3, 6, 9]);
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn run_pipeline_json_executes_rust_serde_spec() {
+        let values = vec![0.0, 0.0, 0.0, 7.0, 7.0, 7.0, -2.0, -2.0, -2.0];
+        let view = univariate(&values);
+        let stopping = Stopping::KnownK(2);
+        let pipeline = PipelineSpec {
+            detector: DetectorConfig::Offline(OfflineDetectorConfig::Pelt(
+                cpd_offline::PeltConfig {
+                    stopping: stopping.clone(),
+                    ..cpd_offline::PeltConfig::default()
+                },
+            )),
+            cost: CostConfig::L2,
+            preprocess: None,
+            constraints: Constraints {
+                min_segment_len: 2,
+                ..Constraints::default()
+            },
+            stopping: Some(stopping),
+            seed: None,
+        };
+        let encoded = serde_json::to_string(&pipeline).expect("pipeline should serialize");
+
+        let result = run_pipeline_json(&view, &encoded).expect("pipeline json should execute");
         assert_eq!(result.breakpoints, vec![3, 6, 9]);
     }
 }

@@ -80,6 +80,62 @@ def test_detect_offline_accepts_pipeline_spec() -> None:
     assert pipelined.breakpoints == explicit.breakpoints
 
 
+def test_detect_offline_accepts_rust_serde_pipeline_shape() -> None:
+    x = _three_regime_signal()
+    pipeline = {
+        "detector": {
+            "Offline": {
+                "Pelt": {
+                    "stopping": {"KnownK": 2},
+                    "params_per_segment": 2,
+                    "cancel_check_every": 1000,
+                }
+            }
+        },
+        "cost": "L2",
+        "constraints": {"min_segment_len": 2},
+        "stopping": {"KnownK": 2},
+        "seed": None,
+    }
+
+    pipelined = cpd.detect_offline(x, pipeline=pipeline)
+    explicit = cpd.detect_offline(
+        x,
+        detector="pelt",
+        cost="l2",
+        constraints={"min_segment_len": 2},
+        stopping={"n_bkps": 2},
+    )
+
+    assert pipelined.breakpoints == explicit.breakpoints
+
+
+def test_detect_offline_pipeline_repro_mode_matches_explicit_path() -> None:
+    x = _three_regime_signal()
+    pipeline = {
+        "detector": {"kind": "pelt", "params_per_segment": 2},
+        "cost": "l2",
+        "constraints": {"min_segment_len": 2},
+        "stopping": {"n_bkps": 2},
+    }
+
+    pipelined = cpd.detect_offline(x, pipeline=pipeline, repro_mode="fast")
+    explicit = cpd.detect_offline(
+        x,
+        detector="pelt",
+        cost="l2",
+        constraints={"min_segment_len": 2},
+        stopping={"n_bkps": 2},
+        repro_mode="fast",
+    )
+
+    assert pipelined.breakpoints == explicit.breakpoints
+    assert not any(
+        "currently uses balanced reproducibility mode" in note
+        for note in pipelined.diagnostics.notes
+    )
+
+
 def test_detect_offline_accepts_extended_constraints_surface() -> None:
     x = _three_regime_signal()
     result = cpd.detect_offline(

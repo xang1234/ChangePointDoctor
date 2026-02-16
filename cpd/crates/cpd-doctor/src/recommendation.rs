@@ -7,8 +7,9 @@ use crate::diagnostics::{
 };
 use cpd_core::{
     Constraints, CpdError, DTypeView, ExecutionContext, MemoryLayout, MissingPolicy,
-    OfflineChangePointResult, OfflineDetector, Penalty, Stopping, TimeIndex, TimeSeriesView,
-    penalty_value, validate_breakpoints, validate_constraints, validate_constraints_config,
+    OfflineChangePointResult, OfflineDetector, Penalty, ReproMode, Stopping, TimeIndex,
+    TimeSeriesView, penalty_value, validate_breakpoints, validate_constraints,
+    validate_constraints_config,
 };
 use cpd_costs::{CostL2Mean, CostModel, CostNIGMarginal, CostNormalMeanVar};
 use cpd_offline::{BinSeg, BinSegConfig, Pelt, PeltConfig, Wbs, WbsConfig, WbsIntervalStrategy};
@@ -344,27 +345,49 @@ fn with_stopping_and_seed(
     stopping: &Stopping,
     seed: Option<u64>,
 ) -> Result<OfflineDetectorConfig, CpdError> {
-    let seeded = match detector {
+    match detector {
         OfflineDetectorConfig::Pelt(config) => {
-            let mut updated = config.clone();
-            updated.stopping = stopping.clone();
-            OfflineDetectorConfig::Pelt(updated)
+            if config.stopping != *stopping {
+                return Err(CpdError::invalid_input(format!(
+                    "offline pipeline has inconsistent stopping configuration for detector=pelt: detector.stopping={:?}, pipeline.stopping={:?}",
+                    config.stopping, stopping
+                )));
+            }
+            if seed.is_some() {
+                return Err(CpdError::invalid_input(
+                    "offline pipeline seed is only supported for detector=wbs",
+                ));
+            }
+            Ok(OfflineDetectorConfig::Pelt(config.clone()))
         }
         OfflineDetectorConfig::BinSeg(config) => {
-            let mut updated = config.clone();
-            updated.stopping = stopping.clone();
-            OfflineDetectorConfig::BinSeg(updated)
+            if config.stopping != *stopping {
+                return Err(CpdError::invalid_input(format!(
+                    "offline pipeline has inconsistent stopping configuration for detector=binseg: detector.stopping={:?}, pipeline.stopping={:?}",
+                    config.stopping, stopping
+                )));
+            }
+            if seed.is_some() {
+                return Err(CpdError::invalid_input(
+                    "offline pipeline seed is only supported for detector=wbs",
+                ));
+            }
+            Ok(OfflineDetectorConfig::BinSeg(config.clone()))
         }
         OfflineDetectorConfig::Wbs(config) => {
+            if config.stopping != *stopping {
+                return Err(CpdError::invalid_input(format!(
+                    "offline pipeline has inconsistent stopping configuration for detector=wbs: detector.stopping={:?}, pipeline.stopping={:?}",
+                    config.stopping, stopping
+                )));
+            }
             let mut updated = config.clone();
-            updated.stopping = stopping.clone();
             if let Some(seed_value) = seed {
                 updated.seed = seed_value;
             }
-            OfflineDetectorConfig::Wbs(updated)
+            Ok(OfflineDetectorConfig::Wbs(updated))
         }
-    };
-    Ok(seeded)
+    }
 }
 
 fn online_kind_from_config(detector: &OnlineDetectorConfig) -> OnlineDetectorKind {
@@ -769,7 +792,22 @@ pub fn execute_pipeline(
     x: &TimeSeriesView<'_>,
     pipeline: &PipelineSpec,
 ) -> Result<OfflineChangePointResult, CpdError> {
-    run_offline_pipeline(x, pipeline)
+    execute_pipeline_with_repro_mode(x, pipeline, ReproMode::Balanced)
+}
+
+/// Executes an offline pipeline specification directly from Rust with a
+/// caller-provided reproducibility mode.
+pub fn execute_pipeline_with_repro_mode(
+    x: &TimeSeriesView<'_>,
+    pipeline: &PipelineSpec,
+    repro_mode: ReproMode,
+) -> Result<OfflineChangePointResult, CpdError> {
+    if pipeline.is_online() {
+        return Err(CpdError::invalid_input(
+            "execute_pipeline only supports offline pipelines; received online pipeline",
+        ));
+    }
+    run_offline_pipeline(x, pipeline, repro_mode)
 }
 
 pub fn validate_top_k(
@@ -874,7 +912,7 @@ pub fn validate_top_k(
         }
 
         let effective_pipeline = pipeline_with_seed_override(&recommendation.pipeline, seed);
-        match run_offline_pipeline(&validation_view, &effective_pipeline) {
+        match run_offline_pipeline(&validation_view, &effective_pipeline, ReproMode::Balanced) {
             Ok(result) => {
                 let remapped = remap_validation_result(result, sampled_row_indices, x.n)?;
                 pipeline_results.push((effective_pipeline, remapped));
@@ -1119,6 +1157,7 @@ fn remap_breakpoints_to_original(
 fn run_offline_pipeline(
     x: &TimeSeriesView<'_>,
     pipeline: &PipelineSpec,
+    repro_mode: ReproMode,
 ) -> Result<OfflineChangePointResult, CpdError> {
     let config = pipeline.to_pipeline_config()?;
     #[cfg(feature = "preprocess")]
@@ -1126,14 +1165,15 @@ fn run_offline_pipeline(
         let preprocess = cpd_preprocess::PreprocessPipeline::new(preprocess.clone())?;
         let preprocessed = preprocess.apply(x)?;
         let preprocessed_view = preprocessed.as_view()?;
-        return run_offline_pipeline_with_config(&preprocessed_view, &config);
+        return run_offline_pipeline_with_config(&preprocessed_view, &config, repro_mode);
     }
-    run_offline_pipeline_with_config(x, &config)
+    run_offline_pipeline_with_config(x, &config, repro_mode)
 }
 
 fn run_offline_pipeline_with_config(
     x: &TimeSeriesView<'_>,
     pipeline: &PipelineConfig,
+    repro_mode: ReproMode,
 ) -> Result<OfflineChangePointResult, CpdError> {
     let PipelineConfig::Offline {
         detector,
@@ -1142,7 +1182,7 @@ fn run_offline_pipeline_with_config(
     } = pipeline
     else {
         return Err(CpdError::invalid_input(
-            "validate_top_k only supports offline pipelines",
+            "offline pipeline execution requires an offline detector configuration",
         ));
     };
 
@@ -1162,21 +1202,24 @@ fn run_offline_pipeline_with_config(
         None
     };
     let detect_view = sanitized_view.as_ref().unwrap_or(x);
-    let ctx = ExecutionContext::new(constraints);
+    let ctx = ExecutionContext::new(constraints).with_repro_mode(repro_mode);
 
     match cost {
         OfflineCostKind::L2 => {
-            run_offline_detector_with_cost(detect_view, detector, &ctx, CostL2Mean::default())
+            run_offline_detector_with_cost(detect_view, detector, &ctx, CostL2Mean::new(repro_mode))
         }
         OfflineCostKind::Normal => run_offline_detector_with_cost(
             detect_view,
             detector,
             &ctx,
-            CostNormalMeanVar::default(),
+            CostNormalMeanVar::new(repro_mode),
         ),
-        OfflineCostKind::Nig => {
-            run_offline_detector_with_cost(detect_view, detector, &ctx, CostNIGMarginal::default())
-        }
+        OfflineCostKind::Nig => run_offline_detector_with_cost(
+            detect_view,
+            detector,
+            &ctx,
+            CostNIGMarginal::new(repro_mode),
+        ),
     }
 }
 
@@ -1201,8 +1244,17 @@ fn pipeline_with_seed_override(pipeline: &PipelineSpec, seed: Option<u64>) -> Pi
     let Some(seed_value) = seed else {
         return pipeline.clone();
     };
+    if !matches!(
+        pipeline.detector,
+        DetectorConfig::Offline(OfflineDetectorConfig::Wbs(_))
+    ) {
+        return pipeline.clone();
+    }
     let mut updated = pipeline.clone();
     updated.seed = Some(seed_value);
+    if let DetectorConfig::Offline(OfflineDetectorConfig::Wbs(config)) = &mut updated.detector {
+        config.seed = seed_value;
+    }
     updated
 }
 
@@ -1474,29 +1526,31 @@ fn compute_penalty_sensitivity(
             continue;
         };
 
-        let low_result = match run_offline_pipeline(validation_view, &scaled_low) {
-            Ok(result) => remap_validation_result(result, sampled_row_indices, original_n)?,
-            Err(err) => {
-                penalty_run_failure_count = penalty_run_failure_count.saturating_add(1);
-                notes.push(format!(
+        let low_result =
+            match run_offline_pipeline(validation_view, &scaled_low, ReproMode::Balanced) {
+                Ok(result) => remap_validation_result(result, sampled_row_indices, original_n)?,
+                Err(err) => {
+                    penalty_run_failure_count = penalty_run_failure_count.saturating_add(1);
+                    notes.push(format!(
                     "penalty sensitivity skipped for pipeline={} because 0.9x run failed: {err}",
                     pipeline_id_spec(pipeline)
                 ));
-                continue;
-            }
-        };
+                    continue;
+                }
+            };
 
-        let high_result = match run_offline_pipeline(validation_view, &scaled_high) {
-            Ok(result) => remap_validation_result(result, sampled_row_indices, original_n)?,
-            Err(err) => {
-                penalty_run_failure_count = penalty_run_failure_count.saturating_add(1);
-                notes.push(format!(
+        let high_result =
+            match run_offline_pipeline(validation_view, &scaled_high, ReproMode::Balanced) {
+                Ok(result) => remap_validation_result(result, sampled_row_indices, original_n)?,
+                Err(err) => {
+                    penalty_run_failure_count = penalty_run_failure_count.saturating_add(1);
+                    notes.push(format!(
                     "penalty sensitivity skipped for pipeline={} because 1.1x run failed: {err}",
                     pipeline_id_spec(pipeline)
                 ));
-                continue;
-            }
-        };
+                    continue;
+                }
+            };
 
         let low_overlap = jaccard_with_tolerance(
             base_result.change_points.as_slice(),
@@ -3164,11 +3218,13 @@ fn pipeline_id_spec(pipeline: &PipelineSpec) -> String {
 mod tests {
     use super::{
         CalibrationFamily, CalibrationObservation, CostConfig, DetectorConfig, Objective,
-        OfflineCostKind, OfflineDetectorConfig, OnlineDetectorConfig, PipelineConfig, PipelineSpec,
-        confidence_formula, evaluate_calibration, recommend, validate_top_k,
+        OfflineCostKind, OfflineDetectorConfig, OnlineDetectorConfig, OnlineDetectorKind,
+        PipelineConfig, PipelineSpec, confidence_formula, evaluate_calibration, recommend,
+        validate_top_k,
     };
     use cpd_core::{
-        Constraints, MemoryLayout, MissingPolicy, Penalty, Stopping, TimeIndex, TimeSeriesView,
+        Constraints, MemoryLayout, MissingPolicy, Penalty, ReproMode, Stopping, TimeIndex,
+        TimeSeriesView,
     };
     use cpd_online::{CusumConfig, ObservationModel};
     use std::collections::BTreeSet;
@@ -4077,6 +4133,57 @@ mod tests {
     fn pipeline_spec_roundtrip_serde_executes_consistently() {
         let values = vec![0.0, 0.0, 0.0, 5.0, 5.0, 5.0, -3.0, -3.0, -3.0];
         let view = make_univariate_view(&values);
+        let stopping = Stopping::KnownK(2);
+        let pipeline = PipelineSpec {
+            detector: DetectorConfig::Offline(OfflineDetectorConfig::Pelt(
+                cpd_offline::PeltConfig {
+                    stopping: stopping.clone(),
+                    ..cpd_offline::PeltConfig::default()
+                },
+            )),
+            cost: CostConfig::L2,
+            preprocess: None,
+            constraints: Constraints {
+                min_segment_len: 2,
+                ..Constraints::default()
+            },
+            stopping: Some(stopping),
+            seed: None,
+        };
+
+        let first = super::execute_pipeline(&view, &pipeline).expect("first run should succeed");
+        let encoded = serde_json::to_vec(&pipeline).expect("pipeline should serialize");
+        let decoded: PipelineSpec =
+            serde_json::from_slice(&encoded).expect("pipeline should decode");
+        let second = super::execute_pipeline(&view, &decoded).expect("second run should succeed");
+
+        assert_eq!(first.breakpoints, second.breakpoints);
+        assert_eq!(first.diagnostics.algorithm, second.diagnostics.algorithm);
+        assert_eq!(first.diagnostics.cost_model, second.diagnostics.cost_model);
+    }
+
+    #[test]
+    fn execute_pipeline_rejects_online_spec_with_clear_error() {
+        let values = vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0];
+        let view = make_univariate_view(&values);
+        let pipeline = PipelineSpec {
+            detector: DetectorConfig::Online(OnlineDetectorKind::Cusum),
+            cost: CostConfig::None,
+            preprocess: None,
+            constraints: Constraints::default(),
+            stopping: None,
+            seed: None,
+        };
+
+        let err = super::execute_pipeline(&view, &pipeline)
+            .expect_err("online pipeline should be rejected");
+        assert!(err.to_string().contains("only supports offline pipelines"));
+    }
+
+    #[test]
+    fn execute_pipeline_rejects_inconsistent_stopping_configuration() {
+        let values = vec![0.0, 0.0, 0.0, 5.0, 5.0, 5.0, -3.0, -3.0, -3.0];
+        let view = make_univariate_view(&values);
         let pipeline = PipelineSpec {
             detector: DetectorConfig::Offline(OfflineDetectorConfig::Pelt(
                 cpd_offline::PeltConfig::default(),
@@ -4091,15 +4198,39 @@ mod tests {
             seed: None,
         };
 
-        let first = super::execute_pipeline(&view, &pipeline).expect("first run should succeed");
-        let encoded = serde_json::to_vec(&pipeline).expect("pipeline should serialize");
-        let decoded: PipelineSpec =
-            serde_json::from_slice(&encoded).expect("pipeline should decode");
-        let second = super::execute_pipeline(&view, &decoded).expect("second run should succeed");
+        let err = super::execute_pipeline(&view, &pipeline)
+            .expect_err("mismatched stopping configuration should be rejected");
+        assert!(
+            err.to_string()
+                .contains("inconsistent stopping configuration")
+        );
+    }
 
-        assert_eq!(first.breakpoints, second.breakpoints);
-        assert_eq!(first.diagnostics.algorithm, second.diagnostics.algorithm);
-        assert_eq!(first.diagnostics.cost_model, second.diagnostics.cost_model);
+    #[test]
+    fn execute_pipeline_with_repro_mode_runs_offline_spec() {
+        let values = vec![0.0, 0.0, 0.0, 5.0, 5.0, 5.0, -3.0, -3.0, -3.0];
+        let view = make_univariate_view(&values);
+        let stopping = Stopping::KnownK(2);
+        let pipeline = PipelineSpec {
+            detector: DetectorConfig::Offline(OfflineDetectorConfig::Pelt(
+                cpd_offline::PeltConfig {
+                    stopping: stopping.clone(),
+                    ..cpd_offline::PeltConfig::default()
+                },
+            )),
+            cost: CostConfig::L2,
+            preprocess: None,
+            constraints: Constraints {
+                min_segment_len: 2,
+                ..Constraints::default()
+            },
+            stopping: Some(stopping),
+            seed: None,
+        };
+
+        let result = super::execute_pipeline_with_repro_mode(&view, &pipeline, ReproMode::Fast)
+            .expect("offline pipeline should execute under fast repro mode");
+        assert_eq!(result.breakpoints, vec![3, 6, 9]);
     }
 
     #[test]

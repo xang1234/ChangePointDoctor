@@ -17,7 +17,13 @@ path = "src/lib.rs"
 [features]
 default = []
 rayon = ["cpd-offline/rayon", "cpd-online/rayon"]
-serde = ["cpd-core/serde", "cpd-offline/serde", "cpd-online/serde", "dep:serde"]
+serde = [
+  "cpd-core/serde",
+  "cpd-offline/serde",
+  "cpd-online/serde",
+  "cpd-preprocess?/serde",
+  "dep:serde",
+]
 tracing = ["cpd-offline/tracing", "cpd-online/tracing"]
 simd = ["cpd-offline/simd", "cpd-online/simd"]
 kernel = ["cpd-offline/kernel", "cpd-online/kernel"]

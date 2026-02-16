@@ -13,7 +13,8 @@ pub use recommendation::{
     Explanation, FamilyCalibrationMetrics, Objective, OfflineCostKind, OfflineDetectorConfig,
     OnlineDetectorConfig, OnlineDetectorKind, OnlineObservationKind, PipelineConfig, PipelineSpec,
     Recommendation, ResourceEstimate, ValidationReport, ValidationSummary, confidence_formula,
-    evaluate_calibration, execute_pipeline, recommend, validate_top_k,
+    evaluate_calibration, execute_pipeline, execute_pipeline_with_repro_mode, recommend,
+    validate_top_k,
 };
 
 #[cfg(feature = "preprocess")]

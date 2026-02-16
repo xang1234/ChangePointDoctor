@@ -217,6 +217,7 @@ to verify architecture and run the CI-aligned local sanity flow.
   - `.fit(x)` -> detector
   - `.predict(pen=..., n_bkps=...)` -> `OfflineChangePointResult`
 - `detect_offline(x, pipeline=None, detector, cost, constraints, stopping, preprocess, repro_mode, return_diagnostics)`
+  - `pipeline` accepts both simplified Python dicts (for example `{"detector": {"kind": "pelt"}}`) and Rust `PipelineSpec` serde shape (for example `{"detector": {"Offline": {"Pelt": {...}}}, ...}`).
 - `OfflineChangePointResult`
   - fields: `breakpoints`, `change_points`, `scores`, `segments`, `diagnostics`
   - helper: `to_json()` (`from_json(...)` is planned and not yet implemented)
