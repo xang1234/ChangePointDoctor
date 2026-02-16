@@ -33,6 +33,16 @@ impl Default for DynpConfig {
 impl DynpConfig {
     fn validate(&self) -> Result<(), CpdError> {
         validate_stopping(&self.stopping)?;
+        match &self.stopping {
+            Stopping::KnownK(_) => Ok(()),
+            Stopping::Penalized(penalty) => Err(CpdError::not_supported(format!(
+                "DynpConfig.stopping must be KnownK; got Penalized({penalty:?})"
+            ))),
+            Stopping::PenaltyPath(path) => Err(CpdError::not_supported(format!(
+                "DynpConfig.stopping must be KnownK; got PenaltyPath of length {}",
+                path.len()
+            ))),
+        }?;
         Ok(())
     }
 
@@ -177,7 +187,12 @@ fn run_dynp_known_k<C: CostModel>(
     dp_prev[0] = 0.0;
     let mut iteration = 0usize;
 
-    for segment_count in 1..=segments {
+    for (segment_count, backpointer_row) in backpointers
+        .iter_mut()
+        .enumerate()
+        .take(segments + 1)
+        .skip(1)
+    {
         let mut dp_curr = vec![inf; endpoints.len()];
 
         for end_idx in 1..endpoints.len() {
@@ -224,7 +239,7 @@ fn run_dynp_known_k<C: CostModel>(
 
             if best_prev_idx != usize::MAX {
                 dp_curr[end_idx] = best_objective;
-                backpointers[segment_count][end_idx] = best_prev_idx;
+                backpointer_row[end_idx] = best_prev_idx;
             }
         }
 
@@ -560,28 +575,14 @@ mod tests {
 
     #[test]
     fn penalized_stopping_is_not_supported() {
-        let detector = Dynp::new(
+        let err = Dynp::new(
             CostL2Mean::default(),
             DynpConfig {
                 stopping: Stopping::Penalized(Penalty::Manual(1.0)),
                 cancel_check_every: 16,
             },
         )
-        .expect("config should be valid");
-
-        let values = vec![0.0, 0.0, 10.0, 10.0];
-        let view = make_f64_view(
-            &values,
-            values.len(),
-            1,
-            MemoryLayout::CContiguous,
-            MissingPolicy::Error,
-        );
-        let constraints = constraints_with_min_segment_len(1);
-        let ctx = ExecutionContext::new(&constraints);
-        let err = detector
-            .detect(&view, &ctx)
-            .expect_err("penalized stopping should be rejected");
-        assert!(err.to_string().contains("supports only KnownK"));
+        .expect_err("penalized stopping should be rejected at config validation");
+        assert!(err.to_string().contains("must be KnownK"));
     }
 }
