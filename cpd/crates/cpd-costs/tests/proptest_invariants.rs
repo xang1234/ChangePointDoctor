@@ -15,7 +15,6 @@ use proptest::test_runner::{Config as ProptestConfig, FileFailurePersistence};
 const ABS_TOL: f64 = 1e-7;
 const REL_TOL: f64 = 1e-6;
 const VAR_FLOOR: f64 = f64::EPSILON * 1e6;
-const BERNOULLI_PROB_FLOOR: f64 = f64::EPSILON * 1e6;
 const MIN_PROPTEST_CASES: u32 = 1000;
 const LOG_2PI: f64 = 1.8378770664093453;
 
@@ -123,9 +122,12 @@ fn naive_bernoulli(values: &[f64], start: usize, end: usize) -> f64 {
     let len = segment.len() as f64;
     let ones: f64 = segment.iter().sum();
     let zeros = len - ones;
+    if ones == 0.0 || zeros == 0.0 {
+        return 0.0;
+    }
     let p_hat = ones / len;
-    let log_p = p_hat.max(BERNOULLI_PROB_FLOOR).ln();
-    let log_one_minus_p = (1.0 - p_hat).max(BERNOULLI_PROB_FLOOR).ln();
+    let log_p = p_hat.ln();
+    let log_one_minus_p = (-p_hat).ln_1p();
     -(ones * log_p + zeros * log_one_minus_p)
 }
 

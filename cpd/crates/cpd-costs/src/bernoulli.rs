@@ -8,7 +8,6 @@ use cpd_core::{
 };
 
 const BINARY_TOL: f64 = 1e-12;
-const PROB_FLOOR: f64 = f64::EPSILON * 1e6;
 
 /// Bernoulli segment cost model for binary-event probability changes.
 ///
@@ -159,19 +158,34 @@ fn read_value(x: &TimeSeriesView<'_>, t: usize, dim: usize) -> Result<f64, CpdEr
     }
 }
 
-fn parse_binary(value: f64, t: usize, dim: usize) -> Result<usize, CpdError> {
+fn parse_binary(
+    value: f64,
+    t: usize,
+    dim: usize,
+    repro_mode: ReproMode,
+) -> Result<usize, CpdError> {
     if !value.is_finite() {
         return Err(CpdError::invalid_input(format!(
             "CostBernoulli requires finite binary observations in {{0,1}}; got value={value} at t={t}, dim={dim}"
         )));
     }
 
-    if (value - 0.0).abs() <= BINARY_TOL {
+    if value == 0.0 {
         return Ok(0);
     }
 
-    if (value - 1.0).abs() <= BINARY_TOL {
+    if value == 1.0 {
         return Ok(1);
+    }
+
+    if matches!(repro_mode, ReproMode::Balanced) {
+        if (value - 0.0).abs() <= BINARY_TOL {
+            return Ok(0);
+        }
+
+        if (value - 1.0).abs() <= BINARY_TOL {
+            return Ok(1);
+        }
     }
 
     Err(CpdError::invalid_input(format!(
@@ -179,8 +193,13 @@ fn parse_binary(value: f64, t: usize, dim: usize) -> Result<usize, CpdError> {
     )))
 }
 
-fn read_binary(x: &TimeSeriesView<'_>, t: usize, dim: usize) -> Result<usize, CpdError> {
-    parse_binary(read_value(x, t, dim)?, t, dim)
+fn read_binary(
+    x: &TimeSeriesView<'_>,
+    t: usize,
+    dim: usize,
+    repro_mode: ReproMode,
+) -> Result<usize, CpdError> {
+    parse_binary(read_value(x, t, dim)?, t, dim, repro_mode)
 }
 
 fn cache_overflow_err(n: usize, d: usize) -> CpdError {
@@ -217,7 +236,7 @@ impl CostModel for CostBernoulli {
 
         for dim in 0..x.d {
             for t in 0..x.n {
-                let _ = read_binary(x, t, dim)?;
+                let _ = read_binary(x, t, dim, self.repro_mode)?;
             }
         }
 
@@ -268,7 +287,7 @@ impl CostModel for CostBernoulli {
             prefix_count.push(running_count);
 
             for t in 0..x.n {
-                let bit = read_binary(x, t, dim)?;
+                let bit = read_binary(x, t, dim, self.repro_mode)?;
                 running_count = running_count
                     .checked_add(bit)
                     .ok_or_else(|| cache_overflow_err(x.n, x.d))?;
@@ -323,9 +342,17 @@ impl CostModel for CostBernoulli {
             let ones = cache.prefix_count[base + end] - cache.prefix_count[base + start];
             let zeros = segment_len - ones;
 
+            if ones == 0 || zeros == 0 {
+                continue;
+            }
+
             let p_hat = (ones as f64) / segment_len_f64;
-            let log_p = p_hat.max(PROB_FLOOR).ln();
-            let log_one_minus_p = (1.0 - p_hat).max(PROB_FLOOR).ln();
+            let log_p = p_hat.ln();
+            let log_one_minus_p = if matches!(self.repro_mode, ReproMode::Balanced) {
+                (-p_hat).ln_1p()
+            } else {
+                ((zeros as f64) / segment_len_f64).ln()
+            };
 
             total -= (ones as f64) * log_p + (zeros as f64) * log_one_minus_p;
         }
@@ -336,9 +363,7 @@ impl CostModel for CostBernoulli {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        BINARY_TOL, BernoulliCache, CostBernoulli, PROB_FLOOR, cache_overflow_err, read_value,
-    };
+    use super::{BINARY_TOL, BernoulliCache, CostBernoulli, cache_overflow_err, read_value};
     use crate::model::CostModel;
     use cpd_core::{
         CachePolicy, CpdError, DTypeView, MemoryLayout, MissingPolicy, MissingSupport, ReproMode,
@@ -396,9 +421,12 @@ mod tests {
         let segment_len = segment.len() as f64;
         let ones = segment.iter().copied().sum::<f64>();
         let zeros = segment_len - ones;
+        if ones == 0.0 || zeros == 0.0 {
+            return 0.0;
+        }
         let p_hat = ones / segment_len;
-        let log_p = p_hat.max(PROB_FLOOR).ln();
-        let log_one_minus_p = (1.0 - p_hat).max(PROB_FLOOR).ln();
+        let log_p = p_hat.ln();
+        let log_one_minus_p = (-p_hat).ln_1p();
         -(ones * log_p + zeros * log_one_minus_p)
     }
 
@@ -508,6 +536,27 @@ mod tests {
             MissingPolicy::Error,
         );
         model.validate(&f64_view).expect("f64 binary inputs");
+    }
+
+    #[test]
+    fn strict_mode_rejects_binary_tolerance_noise() {
+        let noisy_values = [0.0, 1.0 + 0.5 * BINARY_TOL, 1.0, 0.0];
+        let noisy_view = make_f64_view(
+            &noisy_values,
+            4,
+            1,
+            MemoryLayout::CContiguous,
+            MissingPolicy::Error,
+        );
+
+        CostBernoulli::new(ReproMode::Balanced)
+            .validate(&noisy_view)
+            .expect("balanced mode should accept tiny binary rounding noise");
+
+        let err = CostBernoulli::new(ReproMode::Strict)
+            .validate(&noisy_view)
+            .expect_err("strict mode should reject non-exact binary values");
+        assert!(err.to_string().contains("binary observations"));
     }
 
     #[test]
