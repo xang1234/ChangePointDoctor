@@ -2,6 +2,7 @@
 
 #![forbid(unsafe_code)]
 
+use crate::alert_policy::{AlertGateState, AlertPolicy};
 use crate::event_time::{
     LateDataCounters, LateDataPolicy, OverflowPolicy, compare_event_time_then_arrival,
 };
@@ -83,6 +84,7 @@ fn normalize_threshold_ratio(score: f64, threshold: f64) -> f64 {
 pub struct CusumConfig {
     pub drift: f64,
     pub threshold: f64,
+    pub alert_policy: AlertPolicy,
     pub target_mean: f64,
     pub late_data_policy: LateDataPolicy,
 }
@@ -92,6 +94,7 @@ impl Default for CusumConfig {
         Self {
             drift: 0.0,
             threshold: 8.0,
+            alert_policy: AlertPolicy::compatibility(1.0),
             target_mean: 0.0,
             late_data_policy: LateDataPolicy::Reject,
         }
@@ -118,6 +121,7 @@ impl CusumConfig {
                 self.target_mean
             )));
         }
+        self.alert_policy.validate()?;
         self.late_data_policy.validate()?;
         Ok(())
     }
@@ -137,10 +141,17 @@ pub struct CusumState {
     pending_events: Vec<PendingEvent>,
     #[cfg_attr(feature = "serde", serde(default))]
     next_arrival_seq: u64,
+    #[cfg_attr(feature = "serde", serde(default = "default_cusum_alert_gate"))]
+    alert_gate: AlertGateState,
+}
+
+#[cfg(feature = "serde")]
+fn default_cusum_alert_gate() -> AlertGateState {
+    AlertGateState::new(AlertPolicy::compatibility(1.0))
 }
 
 impl CusumState {
-    fn new() -> Self {
+    fn new(alert_policy: AlertPolicy) -> Self {
         Self {
             t: 0,
             watermark_ns: None,
@@ -149,7 +160,14 @@ impl CusumState {
             steps_since_alert: 0,
             pending_events: vec![],
             next_arrival_seq: 0,
+            alert_gate: AlertGateState::new(alert_policy),
         }
+    }
+
+    #[cfg(feature = "serde")]
+    #[allow(dead_code)]
+    pub(crate) fn alert_policy(&self) -> AlertPolicy {
+        self.alert_gate.policy
     }
 
     pub(crate) fn validate(&self) -> Result<(), CpdError> {
@@ -166,6 +184,7 @@ impl CusumState {
                 self.steps_since_alert, self.t
             )));
         }
+        self.alert_gate.validate(self.t)?;
 
         if !self.pending_events.is_empty() && self.watermark_ns.is_none() {
             return Err(CpdError::invalid_input(
@@ -196,9 +215,10 @@ pub struct CusumDetector {
 impl CusumDetector {
     pub fn new(config: CusumConfig) -> Result<Self, CpdError> {
         config.validate()?;
+        let alert_policy = config.alert_policy;
         Ok(Self {
+            state: CusumState::new(alert_policy),
             config,
-            state: CusumState::new(),
             latency_estimator: LatencyEstimator::new(),
         })
     }
@@ -211,13 +231,13 @@ impl CusumDetector {
         &self.state
     }
 
-    fn step_summary(&self, t: usize, score: f64, run_length: usize) -> StepSummary {
+    fn step_summary(&self, t: usize, score: f64, run_length: usize, alert: bool) -> StepSummary {
         let p_change = normalize_threshold_ratio(score, self.config.threshold);
         StepSummary {
             t,
             score,
             p_change,
-            alert: score >= self.config.threshold,
+            alert,
             run_length,
         }
     }
@@ -227,6 +247,7 @@ impl CusumDetector {
             self.state.t.saturating_sub(1),
             self.state.score,
             self.state.steps_since_alert,
+            false,
         )
     }
 
@@ -242,8 +263,8 @@ impl CusumDetector {
             alert_reason: alert_reason.or_else(|| {
                 summary.alert.then(|| {
                     format!(
-                        "cusum score {:.6} > threshold {:.6}",
-                        summary.score, self.config.threshold
+                        "cusum p_change {:.6} >= threshold {:.6}",
+                        summary.p_change, self.state.alert_gate.policy.threshold
                     )
                 })
             }),
@@ -269,12 +290,6 @@ impl CusumDetector {
             ));
         }
 
-        let alert = next_score > self.config.threshold;
-        self.state.steps_since_alert = if alert {
-            0
-        } else {
-            self.state.steps_since_alert.saturating_add(1)
-        };
         self.state.score = next_score;
         self.state.t = self.state.t.saturating_add(1);
 
@@ -282,11 +297,16 @@ impl CusumDetector {
             self.state.watermark_ns = Some(self.state.watermark_ns.map_or(ts, |w| w.max(ts)));
         }
 
-        Ok(self.step_summary(
-            self.state.t.saturating_sub(1),
-            self.state.score,
-            self.state.steps_since_alert,
-        ))
+        let t = self.state.t.saturating_sub(1);
+        let p_change = normalize_threshold_ratio(self.state.score, self.config.threshold);
+        let alert = self.state.alert_gate.maybe_emit(p_change, t);
+        self.state.steps_since_alert = if alert {
+            0
+        } else {
+            self.state.steps_since_alert.saturating_add(1)
+        };
+
+        Ok(self.step_summary(t, self.state.score, self.state.steps_since_alert, alert))
     }
 
     fn next_arrival_seq(&mut self) -> u64 {
@@ -376,7 +396,7 @@ impl OnlineDetector for CusumDetector {
     type State = CusumState;
 
     fn reset(&mut self) {
-        self.state = CusumState::new();
+        self.state = CusumState::new(self.config.alert_policy);
         self.latency_estimator.reset();
     }
 
@@ -548,6 +568,7 @@ impl OnlineDetector for CusumDetector {
 
     fn load_state(&mut self, state: &Self::State) {
         self.state = state.clone();
+        self.config.alert_policy = self.state.alert_gate.policy;
         self.latency_estimator.reset();
     }
 }
@@ -557,6 +578,7 @@ impl OnlineDetector for CusumDetector {
 pub struct PageHinkleyConfig {
     pub delta: f64,
     pub threshold: f64,
+    pub alert_policy: AlertPolicy,
     pub initial_mean: f64,
     pub late_data_policy: LateDataPolicy,
 }
@@ -566,6 +588,7 @@ impl Default for PageHinkleyConfig {
         Self {
             delta: 0.01,
             threshold: 8.0,
+            alert_policy: AlertPolicy::compatibility(1.0),
             initial_mean: 0.0,
             late_data_policy: LateDataPolicy::Reject,
         }
@@ -592,6 +615,7 @@ impl PageHinkleyConfig {
                 self.initial_mean
             )));
         }
+        self.alert_policy.validate()?;
         self.late_data_policy.validate()?;
         Ok(())
     }
@@ -614,10 +638,17 @@ pub struct PageHinkleyState {
     pending_events: Vec<PendingEvent>,
     #[cfg_attr(feature = "serde", serde(default))]
     next_arrival_seq: u64,
+    #[cfg_attr(feature = "serde", serde(default = "default_page_hinkley_alert_gate"))]
+    alert_gate: AlertGateState,
+}
+
+#[cfg(feature = "serde")]
+fn default_page_hinkley_alert_gate() -> AlertGateState {
+    AlertGateState::new(AlertPolicy::compatibility(1.0))
 }
 
 impl PageHinkleyState {
-    fn new(initial_mean: f64) -> Self {
+    fn new(initial_mean: f64, alert_policy: AlertPolicy) -> Self {
         Self {
             t: 0,
             watermark_ns: None,
@@ -629,7 +660,14 @@ impl PageHinkleyState {
             steps_since_alert: 0,
             pending_events: vec![],
             next_arrival_seq: 0,
+            alert_gate: AlertGateState::new(alert_policy),
         }
+    }
+
+    #[cfg(feature = "serde")]
+    #[allow(dead_code)]
+    pub(crate) fn alert_policy(&self) -> AlertPolicy {
+        self.alert_gate.policy
     }
 
     pub(crate) fn validate(&self) -> Result<(), CpdError> {
@@ -671,6 +709,7 @@ impl PageHinkleyState {
                 self.steps_since_alert, self.t
             )));
         }
+        self.alert_gate.validate(self.t)?;
 
         if !self.pending_events.is_empty() && self.watermark_ns.is_none() {
             return Err(CpdError::invalid_input(
@@ -702,7 +741,7 @@ impl PageHinkleyDetector {
     pub fn new(config: PageHinkleyConfig) -> Result<Self, CpdError> {
         config.validate()?;
         Ok(Self {
-            state: PageHinkleyState::new(config.initial_mean),
+            state: PageHinkleyState::new(config.initial_mean, config.alert_policy),
             config,
             latency_estimator: LatencyEstimator::new(),
         })
@@ -720,13 +759,13 @@ impl PageHinkleyDetector {
         (self.state.cumulative_sum - self.state.cumulative_min).max(0.0)
     }
 
-    fn step_summary(&self, t: usize, score: f64, run_length: usize) -> StepSummary {
+    fn step_summary(&self, t: usize, score: f64, run_length: usize, alert: bool) -> StepSummary {
         let p_change = normalize_threshold_ratio(score, self.config.threshold);
         StepSummary {
             t,
             score,
             p_change,
-            alert: score >= self.config.threshold,
+            alert,
             run_length,
         }
     }
@@ -736,6 +775,7 @@ impl PageHinkleyDetector {
             self.state.t.saturating_sub(1),
             self.score(),
             self.state.steps_since_alert,
+            false,
         )
     }
 
@@ -751,8 +791,8 @@ impl PageHinkleyDetector {
             alert_reason: alert_reason.or_else(|| {
                 summary.alert.then(|| {
                     format!(
-                        "page_hinkley score {:.6} > threshold {:.6}",
-                        summary.score, self.config.threshold
+                        "page_hinkley p_change {:.6} >= threshold {:.6}",
+                        summary.p_change, self.state.alert_gate.policy.threshold
                     )
                 })
             }),
@@ -809,18 +849,16 @@ impl PageHinkleyDetector {
         }
 
         let score = self.score();
-        let alert = score > self.config.threshold;
+        let t = self.state.t.saturating_sub(1);
+        let p_change = normalize_threshold_ratio(score, self.config.threshold);
+        let alert = self.state.alert_gate.maybe_emit(p_change, t);
         self.state.steps_since_alert = if alert {
             0
         } else {
             self.state.steps_since_alert.saturating_add(1)
         };
 
-        Ok(self.step_summary(
-            self.state.t.saturating_sub(1),
-            score,
-            self.state.steps_since_alert,
-        ))
+        Ok(self.step_summary(t, score, self.state.steps_since_alert, alert))
     }
 
     fn next_arrival_seq(&mut self) -> u64 {
@@ -910,7 +948,7 @@ impl OnlineDetector for PageHinkleyDetector {
     type State = PageHinkleyState;
 
     fn reset(&mut self) {
-        self.state = PageHinkleyState::new(self.config.initial_mean);
+        self.state = PageHinkleyState::new(self.config.initial_mean, self.config.alert_policy);
         self.latency_estimator.reset();
     }
 
@@ -1082,6 +1120,7 @@ impl OnlineDetector for PageHinkleyDetector {
 
     fn load_state(&mut self, state: &Self::State) {
         self.state = state.clone();
+        self.config.alert_policy = self.state.alert_gate.policy;
         self.latency_estimator.reset();
     }
 }
@@ -1089,8 +1128,8 @@ impl OnlineDetector for PageHinkleyDetector {
 #[cfg(test)]
 mod tests {
     use super::{
-        CusumConfig, CusumDetector, CusumState, PageHinkleyConfig, PageHinkleyDetector,
-        PageHinkleyState,
+        AlertPolicy, CusumConfig, CusumDetector, CusumState, PageHinkleyConfig,
+        PageHinkleyDetector, PageHinkleyState,
     };
     use crate::event_time::{LateDataPolicy, OverflowPolicy};
     use cpd_core::{Constraints, ExecutionContext, OnlineDetector};
@@ -1106,6 +1145,7 @@ mod tests {
         CusumDetector::new(CusumConfig {
             drift: 0.05,
             threshold: 1.0,
+            alert_policy: AlertPolicy::compatibility(1.0),
             target_mean: 0.0,
             late_data_policy: policy,
         })
@@ -1116,6 +1156,7 @@ mod tests {
         PageHinkleyDetector::new(PageHinkleyConfig {
             delta: 0.05,
             threshold: 1.0,
+            alert_policy: AlertPolicy::compatibility(1.0),
             initial_mean: 0.0,
             late_data_policy: policy,
         })
@@ -1175,6 +1216,7 @@ mod tests {
         let mut detector = CusumDetector::new(CusumConfig {
             drift: 0.01,
             threshold: 5.0,
+            alert_policy: AlertPolicy::compatibility(1.0),
             target_mean: 0.0,
             late_data_policy: LateDataPolicy::Reject,
         })
@@ -1194,6 +1236,7 @@ mod tests {
         let mut detector = PageHinkleyDetector::new(PageHinkleyConfig {
             delta: 0.01,
             threshold: 5.0,
+            alert_policy: AlertPolicy::compatibility(1.0),
             initial_mean: 0.0,
             late_data_policy: LateDataPolicy::Reject,
         })
@@ -1213,6 +1256,7 @@ mod tests {
         let mut detector = CusumDetector::new(CusumConfig {
             drift: 0.02,
             threshold: 5.0,
+            alert_policy: AlertPolicy::compatibility(1.0),
             target_mean: 0.0,
             late_data_policy: LateDataPolicy::Reject,
         })
@@ -1241,6 +1285,7 @@ mod tests {
         let mut detector = PageHinkleyDetector::new(PageHinkleyConfig {
             delta: 0.01,
             threshold: 2.0,
+            alert_policy: AlertPolicy::compatibility(1.0),
             initial_mean: 0.0,
             late_data_policy: LateDataPolicy::Reject,
         })
@@ -1262,6 +1307,30 @@ mod tests {
             (120..=160).contains(&first_alert),
             "expected first alert near changepoint; got {first_alert}"
         );
+    }
+
+    #[test]
+    fn cusum_alert_policy_enforces_min_run_rearm_and_cooldown() {
+        let mut detector = CusumDetector::new(CusumConfig {
+            drift: 0.0,
+            threshold: 1.0,
+            alert_policy: AlertPolicy::new(0.8, 0.2, 3, 2),
+            target_mean: 0.0,
+            late_data_policy: LateDataPolicy::Reject,
+        })
+        .expect("valid config");
+
+        let mut observed = Vec::new();
+        for x in [1.0, 1.0, -3.0, 1.0, 1.0] {
+            observed.push(
+                detector
+                    .update(&[x], None, &ctx())
+                    .expect("update should succeed")
+                    .alert,
+            );
+        }
+
+        assert_eq!(observed, vec![false, true, false, false, true]);
     }
 
     #[test]
@@ -1365,6 +1434,48 @@ mod tests {
             assert_eq!(lhs.alert, rhs.alert);
             assert_eq!(lhs.run_length_mode, rhs.run_length_mode);
         }
+    }
+
+    #[test]
+    fn cusum_checkpoint_roundtrip_preserves_nondefault_alert_policy_gate_state() {
+        let config = CusumConfig {
+            drift: 0.0,
+            threshold: 1.0,
+            alert_policy: AlertPolicy::new(0.7, 0.2, 4, 0),
+            target_mean: 0.0,
+            late_data_policy: LateDataPolicy::Reject,
+        };
+        let mut baseline = CusumDetector::new(config.clone()).expect("valid config");
+        let mut first = CusumDetector::new(config).expect("valid config");
+
+        let left = baseline
+            .update(&[1.0], None, &ctx())
+            .expect("baseline update should succeed");
+        let right = first
+            .update(&[1.0], None, &ctx())
+            .expect("first update should succeed");
+        assert_eq!(left.alert, right.alert);
+
+        let saved: CusumState = first.save_state();
+        let mut restore_config = baseline.config().clone();
+        restore_config.alert_policy = AlertPolicy::compatibility(0.05);
+        let mut restored = CusumDetector::new(restore_config).expect("valid config");
+        restored.load_state(&saved);
+
+        for x in [1.0, -3.0, 1.0, 1.0, 1.0, 1.0] {
+            let left = baseline
+                .update(&[x], None, &ctx())
+                .expect("baseline update should succeed");
+            let right = restored
+                .update(&[x], None, &ctx())
+                .expect("restored update should succeed");
+            assert!((left.p_change - right.p_change).abs() < 1e-12);
+            assert_eq!(left.alert, right.alert);
+            assert_eq!(left.run_length_mode, right.run_length_mode);
+            assert_eq!(left.alert_reason, right.alert_reason);
+        }
+
+        assert_eq!(baseline.save_state(), restored.save_state());
     }
 
     #[test]

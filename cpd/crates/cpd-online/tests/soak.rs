@@ -6,7 +6,7 @@
 mod soak_harness;
 
 use cpd_core::{Constraints, ExecutionContext, OnlineDetector};
-use cpd_online::{BocpdConfig, BocpdDetector, ConstantHazard, HazardSpec};
+use cpd_online::{AlertPolicy, BocpdConfig, BocpdDetector, ConstantHazard, HazardSpec};
 use soak_harness::{
     HarnessConfig, SoakProfile, attach_cancellation_quantiles, emit_metrics_json_if_requested,
     enforce_runtime_from_env, measure_cancellation_latency_quantiles_ms, profile_from_env,
@@ -18,7 +18,7 @@ fn make_bocpd_detector() -> BocpdDetector {
         hazard: HazardSpec::Constant(ConstantHazard::new(1.0 / 150.0).expect("valid hazard")),
         max_run_length: 512,
         log_prob_threshold: Some(-30.0),
-        alert_threshold: 0.55,
+        alert_policy: AlertPolicy::compatibility(0.55),
         ..BocpdConfig::default()
     })
     .expect("BOCPD config should be valid")

@@ -11,10 +11,11 @@ use crate::bocpd::{BOCPD_DETECTOR_ID, BOCPD_STATE_SCHEMA_VERSION, BocpdDetector,
 use cpd_core::{CpdError, MIGRATION_GUIDANCE_PATH, OnlineDetector};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use serde_json::value::RawValue;
+#[cfg(unix)]
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::Path;
-use std::process;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Current checkpoint state schema version emitted by runtime writers.
@@ -45,35 +46,30 @@ pub struct CheckpointEnvelope {
 }
 
 #[derive(Clone, Debug, Deserialize)]
-struct LegacyCheckpointEnvelopeV0 {
+struct CheckpointVersionMarker {
+    #[serde(default)]
+    state_schema_version: Option<u32>,
+    #[serde(default)]
+    schema_version: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LegacyCheckpointEnvelopeV0<'a> {
     schema_version: u32,
     detector_id: String,
     engine_version: String,
     created_at_ns: i64,
     payload_crc32: String,
     payload_codec: String,
-    payload: serde_json::Value,
+    #[serde(borrow)]
+    payload: &'a RawValue,
 }
 
-impl LegacyCheckpointEnvelopeV0 {
+impl LegacyCheckpointEnvelopeV0<'_> {
     fn into_current(self) -> Result<CheckpointEnvelope, CpdError> {
         let payload_codec = parse_payload_codec(&self.payload_codec)?;
-        let payload = match payload_codec {
-            PayloadCodec::Json => serde_json::to_vec(&self.payload).map_err(|err| {
-                CpdError::invalid_input(format!(
-                    "legacy checkpoint payload serialization failed (codec=json): {err}"
-                ))
-            })?,
-            PayloadCodec::Bincode => {
-                serde_json::from_value::<Vec<u8>>(self.payload).map_err(|err| {
-                    CpdError::invalid_input(format!(
-                        "legacy checkpoint payload parse failed (codec=bincode): {err}"
-                    ))
-                })?
-            }
-        };
-
         let payload_crc32 = parse_legacy_crc32(&self.payload_crc32)?;
+        let payload = decode_legacy_payload(payload_codec, self.payload.get(), payload_crc32)?;
 
         let envelope = CheckpointEnvelope {
             detector_id: self.detector_id,
@@ -143,6 +139,56 @@ fn parse_legacy_crc32(raw: &str) -> Result<u32, CpdError> {
     })
 }
 
+fn decode_legacy_payload(
+    payload_codec: PayloadCodec,
+    payload_raw: &str,
+    expected_crc32: u32,
+) -> Result<Vec<u8>, CpdError> {
+    match payload_codec {
+        PayloadCodec::Json => {
+            let raw_bytes = payload_raw.as_bytes();
+            let raw_crc32 = crc32fast::hash(raw_bytes);
+            if raw_crc32 == expected_crc32 {
+                return Ok(raw_bytes.to_vec());
+            }
+
+            let value: serde_json::Value = serde_json::from_str(payload_raw).map_err(|err| {
+                CpdError::invalid_input(format!(
+                    "legacy checkpoint payload parse failed (codec=json): {err}"
+                ))
+            })?;
+            let canonical_bytes = serde_json::to_vec(&value).map_err(|err| {
+                CpdError::invalid_input(format!(
+                    "legacy checkpoint payload serialization failed (codec=json): {err}"
+                ))
+            })?;
+            let canonical_crc32 = crc32fast::hash(&canonical_bytes);
+
+            if canonical_crc32 == expected_crc32 {
+                return Ok(canonical_bytes);
+            }
+
+            Err(CpdError::invalid_input(format!(
+                "legacy checkpoint payload crc32 mismatch: expected=0x{expected_crc32:08x}, observed_raw=0x{raw_crc32:08x}, observed_canonical=0x{canonical_crc32:08x}"
+            )))
+        }
+        PayloadCodec::Bincode => {
+            let bytes: Vec<u8> = serde_json::from_str(payload_raw).map_err(|err| {
+                CpdError::invalid_input(format!(
+                    "legacy checkpoint payload parse failed (codec=bincode): {err}"
+                ))
+            })?;
+            let observed = crc32fast::hash(&bytes);
+            if observed != expected_crc32 {
+                return Err(CpdError::invalid_input(format!(
+                    "legacy checkpoint payload crc32 mismatch: expected=0x{expected_crc32:08x}, observed=0x{observed:08x}"
+                )));
+            }
+            Ok(bytes)
+        }
+    }
+}
+
 fn checkpoint_engine_fingerprint() -> String {
     format!(
         "cpd-online/{}/{}-{}",
@@ -167,6 +213,23 @@ fn now_unix_ns() -> Result<i64, CpdError> {
 
 fn io_resource_error(action: &str, path: &Path, err: std::io::Error) -> CpdError {
     CpdError::resource_limit(format!("{action} '{}': {err}", path.display()))
+}
+
+fn sync_parent_directory(parent: &Path) -> Result<(), CpdError> {
+    #[cfg(unix)]
+    {
+        let dir = OpenOptions::new().read(true).open(parent).map_err(|err| {
+            io_resource_error("failed opening checkpoint parent directory", parent, err)
+        })?;
+        dir.sync_all().map_err(|err| {
+            io_resource_error("failed fsync on checkpoint parent directory", parent, err)
+        })
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = parent;
+        Ok(())
+    }
 }
 
 fn serialize_state_payload<State: Serialize>(
@@ -221,46 +284,34 @@ fn write_checkpoint_file_atomic(path: &Path, encoded: &[u8]) -> Result<(), CpdEr
         )));
     }
 
-    let suffix = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|elapsed| elapsed.as_nanos())
-        .unwrap_or_default();
-    let temp_path = parent.join(format!("{file_name}.tmp-{}-{suffix}", process::id()));
-
-    let mut file = OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .open(&temp_path)
-        .map_err(|err| {
-            io_resource_error("failed creating checkpoint temp file", &temp_path, err)
-        })?;
+    let mut file = tempfile::NamedTempFile::new_in(parent)
+        .map_err(|err| io_resource_error("failed creating checkpoint temp file", parent, err))?;
 
     if let Err(err) = file.write_all(encoded) {
-        let _ = std::fs::remove_file(&temp_path);
         return Err(io_resource_error(
             "failed writing checkpoint temp file",
-            &temp_path,
-            err,
-        ));
-    }
-
-    if let Err(err) = file.sync_all() {
-        let _ = std::fs::remove_file(&temp_path);
-        return Err(io_resource_error(
-            "failed fsync on checkpoint temp file",
-            &temp_path,
-            err,
-        ));
-    }
-
-    if let Err(err) = std::fs::rename(&temp_path, path) {
-        let _ = std::fs::remove_file(&temp_path);
-        return Err(io_resource_error(
-            "failed renaming checkpoint temp file",
             path,
             err,
         ));
     }
+
+    if let Err(err) = file.as_file().sync_all() {
+        return Err(io_resource_error(
+            "failed fsync on checkpoint temp file",
+            path,
+            err,
+        ));
+    }
+
+    if let Err(err) = file.persist(path) {
+        return Err(io_resource_error(
+            "failed renaming checkpoint temp file",
+            path,
+            err.error,
+        ));
+    }
+
+    sync_parent_directory(parent)?;
 
     Ok(())
 }
@@ -293,24 +344,24 @@ pub fn encode_checkpoint_envelope(envelope: &CheckpointEnvelope) -> Result<Vec<u
 
 /// Deserializes checkpoint envelope JSON bytes, accepting canonical v1 and legacy v0.
 pub fn decode_checkpoint_envelope(encoded: &[u8]) -> Result<CheckpointEnvelope, CpdError> {
-    let value: serde_json::Value = serde_json::from_slice(encoded).map_err(|err| {
+    let marker: CheckpointVersionMarker = serde_json::from_slice(encoded).map_err(|err| {
         CpdError::invalid_input(format!("checkpoint envelope JSON parse failed: {err}"))
     })?;
 
-    let envelope = if value.get("state_schema_version").is_some() {
-        serde_json::from_value::<CheckpointEnvelope>(value).map_err(|err| {
+    let envelope = if marker.state_schema_version.is_some() {
+        serde_json::from_slice::<CheckpointEnvelope>(encoded).map_err(|err| {
             CpdError::invalid_input(format!(
                 "checkpoint envelope v1 parse failed (expected canonical fields): {err}"
             ))
         })?
-    } else if value.get("schema_version").is_some() {
-        serde_json::from_value::<LegacyCheckpointEnvelopeV0>(value)
-            .map_err(|err| {
+    } else if marker.schema_version.is_some() {
+        let legacy: LegacyCheckpointEnvelopeV0<'_> =
+            serde_json::from_slice(encoded).map_err(|err| {
                 CpdError::invalid_input(format!(
                     "checkpoint envelope legacy v0 parse failed: {err}"
                 ))
-            })?
-            .into_current()?
+            })?;
+        legacy.into_current()?
     } else {
         return Err(CpdError::invalid_input(
             "checkpoint envelope must contain 'state_schema_version' (v1) or 'schema_version' (legacy v0)",
@@ -642,6 +693,10 @@ mod tests {
             load_state_from_checkpoint_envelope(&v1, CUSUM_DETECTOR_ID)
                 .expect("v1 fixture should deserialize detector state");
         assert_eq!(state_v1.t, 3);
+        assert_eq!(
+            state_v1.alert_policy(),
+            crate::AlertPolicy::compatibility(1.0)
+        );
 
         let v0 = decode_checkpoint_envelope(CHECKPOINT_V0_FIXTURE.as_bytes())
             .expect("legacy v0 fixture should decode");
@@ -651,6 +706,29 @@ mod tests {
             load_state_from_checkpoint_envelope(&v0, CUSUM_DETECTOR_ID)
                 .expect("v0 fixture should deserialize detector state");
         assert_eq!(state_v0.t, 3);
+        assert_eq!(
+            state_v0.alert_policy(),
+            crate::AlertPolicy::compatibility(1.0)
+        );
+    }
+
+    #[test]
+    fn legacy_v0_crc_accepts_raw_json_payload_ordering_and_spacing() {
+        let payload_raw =
+            "{ \"watermark_ns\": null, \"steps_since_alert\": 3, \"score\": 0.2, \"t\": 3 }";
+        let payload_crc32 = crc32fast::hash(payload_raw.as_bytes());
+        let legacy = format!(
+            "{{\"schema_version\":0,\"detector_id\":\"cusum\",\"engine_version\":\"0.1.0\",\"created_at_ns\":1738886400000000000,\"payload_codec\":\"json\",\"payload_crc32\":\"{payload_crc32:08x}\",\"payload\":{payload_raw}}}"
+        );
+
+        let envelope = decode_checkpoint_envelope(legacy.as_bytes())
+            .expect("legacy envelope with raw payload crc should decode");
+        let state: crate::CusumState =
+            load_state_from_checkpoint_envelope(&envelope, CUSUM_DETECTOR_ID)
+                .expect("state should deserialize");
+        assert_eq!(state.t, 3);
+        assert_eq!(state.steps_since_alert, 3);
+        assert_eq!(state.alert_policy(), crate::AlertPolicy::compatibility(1.0));
     }
 
     #[test]
@@ -865,6 +943,30 @@ mod tests {
 
         let mut restored = make_cusum();
         load_cusum_checkpoint_file(&mut restored, &path).expect("load after atomic save succeeds");
+        assert_eq!(restored.save_state(), detector.save_state());
+        remove_file_if_exists(&path);
+    }
+
+    #[test]
+    fn atomic_save_overwrites_existing_checkpoint_path() {
+        let path = unique_temp_checkpoint_path("cpd-online-atomic-overwrite");
+        remove_file_if_exists(&path);
+
+        let mut detector = make_cusum();
+        detector
+            .update(&[1.0], None, &ctx())
+            .expect("first update should succeed");
+        save_cusum_checkpoint_file(&detector, &path, PayloadCodec::Json)
+            .expect("initial save should succeed");
+
+        detector
+            .update(&[2.0], None, &ctx())
+            .expect("second update should succeed");
+        save_cusum_checkpoint_file(&detector, &path, PayloadCodec::Json)
+            .expect("overwrite save should succeed");
+
+        let mut restored = make_cusum();
+        load_cusum_checkpoint_file(&mut restored, &path).expect("restored load should succeed");
         assert_eq!(restored.save_state(), detector.save_state());
         remove_file_if_exists(&path);
     }

@@ -2,12 +2,14 @@
 
 #![forbid(unsafe_code)]
 
+pub mod alert_policy;
 pub mod baseline;
 pub mod bocpd;
 #[cfg(feature = "serde")]
 pub mod checkpoint;
 pub mod event_time;
 
+pub use alert_policy::AlertPolicy;
 pub use baseline::{
     CUSUM_DETECTOR_ID, CUSUM_STATE_SCHEMA_VERSION, CusumConfig, CusumDetector, CusumState,
     PAGE_HINKLEY_DETECTOR_ID, PAGE_HINKLEY_STATE_SCHEMA_VERSION, PageHinkleyConfig,

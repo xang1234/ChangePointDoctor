@@ -4,8 +4,8 @@
 
 use cpd_core::{Constraints, CpdError, ExecutionContext, OnlineDetector};
 use cpd_online::{
-    BocpdConfig, BocpdDetector, ConstantHazard, CusumConfig, CusumDetector, HazardSpec,
-    LateDataPolicy, ObservationModel, PageHinkleyConfig, PageHinkleyDetector,
+    AlertPolicy, BocpdConfig, BocpdDetector, ConstantHazard, CusumConfig, CusumDetector,
+    HazardSpec, LateDataPolicy, ObservationModel, PageHinkleyConfig, PageHinkleyDetector,
 };
 use std::sync::OnceLock;
 use std::time::Instant;
@@ -167,7 +167,7 @@ fn bocpd_gaussian_perf_contract() {
         observation: ObservationModel::default(),
         max_run_length: MAX_RUN_LENGTH,
         log_prob_threshold: Some(LOG_PROB_THRESHOLD),
-        alert_threshold: 0.5,
+        alert_policy: AlertPolicy::compatibility(0.5),
         late_data_policy: LateDataPolicy::Reject,
     })
     .expect("BOCPD config should be valid");
@@ -244,6 +244,7 @@ fn cusum_perf_contract() {
     let mut detector = CusumDetector::new(CusumConfig {
         drift: 0.02,
         threshold: 1_000_000.0,
+        alert_policy: AlertPolicy::compatibility(1.0),
         target_mean: 0.0,
         late_data_policy: LateDataPolicy::Reject,
     })
@@ -285,6 +286,7 @@ fn page_hinkley_perf_contract() {
     let mut detector = PageHinkleyDetector::new(PageHinkleyConfig {
         delta: 0.02,
         threshold: 1_000_000.0,
+        alert_policy: AlertPolicy::compatibility(1.0),
         initial_mean: 0.0,
         late_data_policy: LateDataPolicy::Reject,
     })

@@ -2,6 +2,7 @@
 
 #![forbid(unsafe_code)]
 
+use crate::alert_policy::{AlertGateState, AlertPolicy};
 use crate::event_time::{
     LateDataCounters, LateDataPolicy, OverflowPolicy, compare_event_time_then_arrival,
 };
@@ -361,19 +362,33 @@ pub struct BocpdState {
     pending_events: Vec<PendingEvent>,
     #[cfg_attr(feature = "serde", serde(default))]
     next_arrival_seq: u64,
+    #[cfg_attr(feature = "serde", serde(default = "default_bocpd_alert_gate"))]
+    alert_gate: AlertGateState,
+}
+
+#[cfg(feature = "serde")]
+fn default_bocpd_alert_gate() -> AlertGateState {
+    AlertGateState::new(AlertPolicy::compatibility(0.5))
 }
 
 impl BocpdState {
-    fn new(observation: &ObservationModel) -> Self {
+    fn new(config: &BocpdConfig) -> Self {
         Self {
             t: 0,
             watermark_ns: None,
             late_data: LateDataCounters::default(),
             log_run_probs: vec![0.0],
-            run_stats: vec![observation.prior_stats()],
+            run_stats: vec![config.observation.prior_stats()],
             pending_events: vec![],
             next_arrival_seq: 0,
+            alert_gate: AlertGateState::new(config.alert_policy),
         }
+    }
+
+    #[cfg(feature = "serde")]
+    #[allow(dead_code)]
+    pub(crate) fn alert_policy(&self) -> AlertPolicy {
+        self.alert_gate.policy
     }
 
     pub(crate) fn validate(&self) -> Result<(), CpdError> {
@@ -389,6 +404,7 @@ impl BocpdState {
                 self.run_stats.len()
             )));
         }
+        self.alert_gate.validate(self.t)?;
         for event in &self.pending_events {
             if !event.x.is_finite() {
                 return Err(CpdError::invalid_input(
@@ -408,7 +424,7 @@ pub struct BocpdConfig {
     pub max_run_length: usize,
     /// Relative log-probability threshold (must be <= 0). Entries below `max + threshold` are pruned.
     pub log_prob_threshold: Option<f64>,
-    pub alert_threshold: f64,
+    pub alert_policy: AlertPolicy,
     /// Event-time late-data policy used when `update(..., t_ns=Some(...), ...)`.
     pub late_data_policy: LateDataPolicy,
 }
@@ -420,7 +436,7 @@ impl Default for BocpdConfig {
             observation: ObservationModel::default(),
             max_run_length: 2_000,
             log_prob_threshold: Some(-35.0),
-            alert_threshold: 0.5,
+            alert_policy: AlertPolicy::compatibility(0.5),
             late_data_policy: LateDataPolicy::Reject,
         }
     }
@@ -444,11 +460,7 @@ impl BocpdConfig {
             ));
         }
 
-        if !self.alert_threshold.is_finite() || !(0.0..=1.0).contains(&self.alert_threshold) {
-            return Err(CpdError::invalid_input(
-                "alert_threshold must be finite and in [0,1]",
-            ));
-        }
+        self.alert_policy.validate()?;
 
         self.late_data_policy.validate()?;
 
@@ -466,7 +478,7 @@ pub struct BocpdDetector {
 impl BocpdDetector {
     pub fn new(config: BocpdConfig) -> Result<Self, CpdError> {
         config.validate()?;
-        let state = BocpdState::new(&config.observation);
+        let state = BocpdState::new(&config);
         Ok(Self { config, state })
     }
 
@@ -498,14 +510,19 @@ impl BocpdDetector {
         Ok(StepSummary {
             t,
             p_change,
-            alert: p_change >= self.config.alert_threshold,
+            alert: false,
             run_length_mode: argmax_index(log_probs),
             run_length_mean: run_length_expectation(log_probs),
         })
     }
 
     fn current_step_summary(&self) -> Result<StepSummary, CpdError> {
-        self.step_summary_from_log_probs(&self.state.log_run_probs, self.state.t.saturating_sub(1))
+        let mut summary = self.step_summary_from_log_probs(
+            &self.state.log_run_probs,
+            self.state.t.saturating_sub(1),
+        )?;
+        summary.alert = false;
+        Ok(summary)
     }
 
     fn materialize_step_result(
@@ -522,7 +539,7 @@ impl BocpdDetector {
                 summary.alert.then(|| {
                     format!(
                         "bocpd p_change {:.6} >= threshold {:.6}",
-                        summary.p_change, self.config.alert_threshold
+                        summary.p_change, self.state.alert_gate.policy.threshold
                     )
                 })
             }),
@@ -613,8 +630,15 @@ impl BocpdDetector {
         }
         self.state.log_run_probs = next_log_probs;
         self.state.run_stats = next_stats;
-
-        self.step_summary_from_log_probs(&self.state.log_run_probs, self.state.t.saturating_sub(1))
+        let mut summary = self.step_summary_from_log_probs(
+            &self.state.log_run_probs,
+            self.state.t.saturating_sub(1),
+        )?;
+        summary.alert = self
+            .state
+            .alert_gate
+            .maybe_emit(summary.p_change, summary.t);
+        Ok(summary)
     }
 
     fn next_arrival_seq(&mut self) -> u64 {
@@ -702,7 +726,7 @@ impl OnlineDetector for BocpdDetector {
     type State = BocpdState;
 
     fn reset(&mut self) {
-        self.state = BocpdState::new(&self.config.observation);
+        self.state = BocpdState::new(&self.config);
     }
 
     fn update(
@@ -876,6 +900,7 @@ impl OnlineDetector for BocpdDetector {
 
     fn load_state(&mut self, state: &Self::State) {
         self.state = state.clone();
+        self.config.alert_policy = self.state.alert_gate.policy;
     }
 }
 
@@ -1126,8 +1151,8 @@ fn ln_gamma(z: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        BocpdConfig, BocpdDetector, BocpdState, ConstantHazard, GeometricHazard, HazardSpec,
-        LateDataPolicy, ObservationModel, OverflowPolicy,
+        AlertPolicy, BocpdConfig, BocpdDetector, BocpdState, ConstantHazard, GeometricHazard,
+        HazardSpec, LateDataPolicy, ObservationModel, OverflowPolicy,
     };
     use cpd_core::{Constraints, ExecutionContext, OnlineDetector};
     use std::sync::OnceLock;
@@ -1235,10 +1260,97 @@ mod tests {
     }
 
     #[test]
+    fn alert_policy_emits_pulse_for_sustained_high_probability() {
+        let mut detector = BocpdDetector::new(BocpdConfig {
+            hazard: HazardSpec::Constant(ConstantHazard::new(0.9).expect("valid hazard")),
+            observation: ObservationModel::Bernoulli {
+                prior: super::BernoulliBetaPrior {
+                    alpha: 1.0,
+                    beta: 1.0,
+                },
+            },
+            max_run_length: 32,
+            log_prob_threshold: None,
+            alert_policy: AlertPolicy::compatibility(0.5),
+            ..BocpdConfig::default()
+        })
+        .expect("config should be valid");
+
+        let first = detector
+            .update(&[1.0], None, &ctx())
+            .expect("first update should succeed");
+        let second = detector
+            .update(&[1.0], None, &ctx())
+            .expect("second update should succeed");
+
+        assert!(first.alert, "first threshold crossing should emit alert");
+        assert!(
+            first
+                .alert_reason
+                .as_deref()
+                .is_some_and(|reason| reason.contains("p_change"))
+        );
+        assert!(
+            !second.alert,
+            "sustained high p_change must not emit repeated level-style alerts"
+        );
+    }
+
+    #[test]
+    fn checkpoint_roundtrip_preserves_nondefault_alert_policy_gate_state() {
+        let policy = AlertPolicy::new(0.4, 0.0, 4, 0);
+        let config = BocpdConfig {
+            hazard: HazardSpec::Constant(ConstantHazard::new(0.9).expect("valid hazard")),
+            observation: ObservationModel::Bernoulli {
+                prior: super::BernoulliBetaPrior {
+                    alpha: 1.0,
+                    beta: 1.0,
+                },
+            },
+            max_run_length: 64,
+            log_prob_threshold: None,
+            alert_policy: policy,
+            late_data_policy: LateDataPolicy::Reject,
+        };
+
+        let mut baseline = BocpdDetector::new(config.clone()).expect("valid config");
+        let mut first = BocpdDetector::new(config).expect("valid config");
+
+        let baseline_first = baseline
+            .update(&[1.0], None, &ctx())
+            .expect("baseline first update should succeed");
+        let first_first = first
+            .update(&[1.0], None, &ctx())
+            .expect("first detector update should succeed");
+        assert_eq!(baseline_first.alert, first_first.alert);
+
+        let saved: BocpdState = first.save_state();
+        let mut restore_config = baseline.config().clone();
+        restore_config.alert_policy = AlertPolicy::compatibility(0.99);
+        let mut restored = BocpdDetector::new(restore_config).expect("valid config");
+        restored.load_state(&saved);
+
+        for x in [1.0, 1.0, 1.0, 0.0, 1.0, 1.0] {
+            let left = baseline
+                .update(&[x], None, &ctx())
+                .expect("baseline update should succeed");
+            let right = restored
+                .update(&[x], None, &ctx())
+                .expect("restored update should succeed");
+            assert!((left.p_change - right.p_change).abs() < 1e-12);
+            assert_eq!(left.alert, right.alert);
+            assert_eq!(left.run_length_mode, right.run_length_mode);
+            assert_eq!(left.alert_reason, right.alert_reason);
+        }
+
+        assert_eq!(baseline.save_state(), restored.save_state());
+    }
+
+    #[test]
     fn constant_series_keeps_change_probability_low() {
         let mut detector = BocpdDetector::new(BocpdConfig {
             max_run_length: 256,
-            alert_threshold: 0.7,
+            alert_policy: AlertPolicy::compatibility(0.7),
             ..BocpdConfig::default()
         })
         .expect("config should be valid");
