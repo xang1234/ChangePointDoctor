@@ -2,7 +2,7 @@
 
 #![forbid(unsafe_code)]
 
-use cpd_core::{CpdError, OfflineChangePointResult, segments_from_breakpoints};
+use cpd_core::{segments_from_breakpoints, CpdError, OfflineChangePointResult, OnlineStepResult};
 
 /// Precision/recall/F1 summary for tolerance-based matching.
 #[derive(Clone, Debug, PartialEq)]
@@ -22,6 +22,75 @@ pub struct OfflineMetrics {
     pub hausdorff_distance: f64,
     pub rand_index: f64,
     pub annotation_error: f64,
+}
+
+/// Point on an ROC curve for online alerting.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RocPoint {
+    pub threshold: f64,
+    pub true_positive_rate: f64,
+    pub false_positive_rate: f64,
+    pub detected_changes: usize,
+    pub false_alerts: usize,
+}
+
+/// Aggregated online metrics.
+#[derive(Clone, Debug, PartialEq)]
+pub struct OnlineMetrics {
+    pub mean_detection_delay: Option<f64>,
+    pub false_alarm_rate: f64,
+    pub arl0: f64,
+    pub arl1: Option<f64>,
+    pub detected_changes: usize,
+    pub missed_changes: usize,
+    pub false_alerts: usize,
+    pub total_alerts: usize,
+    pub roc_curve: Vec<RocPoint>,
+}
+
+/// Computes online/streaming evaluation metrics from per-step detector outputs.
+///
+/// `true_change_points` must be strictly increasing change indices.
+pub fn online_metrics(
+    steps: &[OnlineStepResult],
+    true_change_points: &[usize],
+) -> Result<OnlineMetrics, CpdError> {
+    validate_online_inputs(steps, true_change_points)?;
+
+    let classification = classify_alerts(steps, true_change_points, |step| step.alert);
+    let mean_detection_delay = mean_usize(classification.detection_delays.as_slice());
+    let false_alarm_rate = rate(classification.false_alerts, steps.len());
+    let arl0 =
+        mean_run_length_between_false_alerts(classification.false_alert_positions.as_slice());
+    let arl1 = mean_detection_delay.map(|delay| delay + 1.0);
+    let roc_curve = roc_curve_data_with_validation(
+        steps,
+        true_change_points,
+        default_roc_thresholds(steps).as_slice(),
+    )?;
+
+    Ok(OnlineMetrics {
+        mean_detection_delay,
+        false_alarm_rate,
+        arl0,
+        arl1,
+        detected_changes: classification.detected_changes,
+        missed_changes: classification.missed_changes,
+        false_alerts: classification.false_alerts,
+        total_alerts: classification.total_alerts,
+        roc_curve,
+    })
+}
+
+/// Computes ROC curve points by sweeping explicit alert thresholds over
+/// `OnlineStepResult::p_change`.
+pub fn roc_curve_data(
+    steps: &[OnlineStepResult],
+    true_change_points: &[usize],
+    thresholds: &[f64],
+) -> Result<Vec<RocPoint>, CpdError> {
+    validate_online_inputs(steps, true_change_points)?;
+    roc_curve_data_with_validation(steps, true_change_points, thresholds)
 }
 
 /// Computes offline evaluation metrics from detected and true segmentation outputs.
@@ -291,6 +360,201 @@ fn overlapping_same_pairs(truth: &[(usize, usize)], detected: &[(usize, usize)])
     pairs
 }
 
+fn roc_curve_data_with_validation(
+    steps: &[OnlineStepResult],
+    true_change_points: &[usize],
+    thresholds: &[f64],
+) -> Result<Vec<RocPoint>, CpdError> {
+    for (index, threshold) in thresholds.iter().enumerate() {
+        if !threshold.is_finite() {
+            return Err(CpdError::invalid_input(format!(
+                "thresholds must be finite; thresholds[{index}]={threshold}"
+            )));
+        }
+    }
+
+    let mut points = Vec::with_capacity(thresholds.len());
+    for &threshold in thresholds {
+        let classification =
+            classify_alerts(steps, true_change_points, |step| step.p_change >= threshold);
+        let true_positive_rate = if true_change_points.is_empty() {
+            1.0
+        } else {
+            classification.detected_changes as f64 / true_change_points.len() as f64
+        };
+        let false_positive_rate = rate(classification.false_alerts, steps.len());
+
+        points.push(RocPoint {
+            threshold,
+            true_positive_rate,
+            false_positive_rate,
+            detected_changes: classification.detected_changes,
+            false_alerts: classification.false_alerts,
+        });
+    }
+
+    Ok(points)
+}
+
+fn validate_online_inputs(
+    steps: &[OnlineStepResult],
+    true_change_points: &[usize],
+) -> Result<(), CpdError> {
+    for (index, step) in steps.iter().enumerate() {
+        if !step.p_change.is_finite() {
+            return Err(CpdError::invalid_input(format!(
+                "OnlineStepResult::p_change must be finite; steps[{index}].p_change={}",
+                step.p_change
+            )));
+        }
+    }
+
+    for index in 1..steps.len() {
+        if steps[index - 1].t >= steps[index].t {
+            return Err(CpdError::invalid_input(format!(
+                "OnlineStepResult::t must be strictly increasing; steps[{}].t={} and steps[{index}].t={}",
+                index - 1,
+                steps[index - 1].t,
+                steps[index].t,
+            )));
+        }
+    }
+
+    for index in 1..true_change_points.len() {
+        if true_change_points[index - 1] >= true_change_points[index] {
+            return Err(CpdError::invalid_input(format!(
+                "true_change_points must be strictly increasing; true_change_points[{}]={} and true_change_points[{index}]={}",
+                index - 1,
+                true_change_points[index - 1],
+                true_change_points[index],
+            )));
+        }
+    }
+
+    Ok(())
+}
+
+fn default_roc_thresholds(steps: &[OnlineStepResult]) -> Vec<f64> {
+    if steps.is_empty() {
+        return vec![1.0, 0.0];
+    }
+
+    let mut unique = steps.iter().map(|step| step.p_change).collect::<Vec<_>>();
+    unique.sort_by(f64::total_cmp);
+    unique.dedup_by(|left, right| left.total_cmp(right).is_eq());
+
+    let min = unique[0];
+    let max = unique[unique.len() - 1];
+    let mut thresholds = Vec::with_capacity(unique.len() + 2);
+    thresholds.push(max + 1.0);
+    thresholds.extend(unique.iter().rev().copied());
+    thresholds.push(min - 1.0);
+    thresholds
+}
+
+#[derive(Debug)]
+struct AlertClassification {
+    detection_delays: Vec<usize>,
+    false_alert_positions: Vec<usize>,
+    detected_changes: usize,
+    missed_changes: usize,
+    false_alerts: usize,
+    total_alerts: usize,
+}
+
+fn classify_alerts<F>(
+    steps: &[OnlineStepResult],
+    true_change_points: &[usize],
+    mut is_alert: F,
+) -> AlertClassification
+where
+    F: FnMut(&OnlineStepResult) -> bool,
+{
+    let mut cp_idx = 0usize;
+    let mut current_change_detected = false;
+    let mut detection_delays = Vec::new();
+    let mut false_alert_positions = Vec::new();
+    let mut missed_changes = 0usize;
+    let mut total_alerts = 0usize;
+
+    for (position, step) in steps.iter().enumerate() {
+        while cp_idx + 1 < true_change_points.len() && step.t >= true_change_points[cp_idx + 1] {
+            if !current_change_detected {
+                missed_changes += 1;
+            }
+            cp_idx += 1;
+            current_change_detected = false;
+        }
+
+        if !is_alert(step) {
+            continue;
+        }
+        total_alerts += 1;
+
+        if cp_idx < true_change_points.len() {
+            let current_change = true_change_points[cp_idx];
+            let next_change = true_change_points
+                .get(cp_idx + 1)
+                .copied()
+                .unwrap_or(usize::MAX);
+            if step.t >= current_change && step.t < next_change && !current_change_detected {
+                detection_delays.push(step.t - current_change);
+                current_change_detected = true;
+            } else {
+                false_alert_positions.push(position);
+            }
+        } else {
+            false_alert_positions.push(position);
+        }
+    }
+
+    if cp_idx < true_change_points.len() {
+        if !current_change_detected {
+            missed_changes += 1;
+        }
+        missed_changes += true_change_points.len() - cp_idx - 1;
+    }
+
+    let detected_changes = detection_delays.len();
+    let false_alerts = false_alert_positions.len();
+    AlertClassification {
+        detection_delays,
+        false_alert_positions,
+        detected_changes,
+        missed_changes,
+        false_alerts,
+        total_alerts,
+    }
+}
+
+fn mean_usize(values: &[usize]) -> Option<f64> {
+    if values.is_empty() {
+        return None;
+    }
+    let total = values.iter().map(|&value| value as u128).sum::<u128>();
+    Some(total as f64 / values.len() as f64)
+}
+
+fn mean_run_length_between_false_alerts(false_alert_positions: &[usize]) -> f64 {
+    if false_alert_positions.is_empty() {
+        return f64::INFINITY;
+    }
+
+    let mut total_run_length = false_alert_positions[0] + 1;
+    for pair in false_alert_positions.windows(2) {
+        total_run_length += pair[1] - pair[0];
+    }
+    total_run_length as f64 / false_alert_positions.len() as f64
+}
+
+fn rate(count: usize, total: usize) -> f64 {
+    if total == 0 {
+        0.0
+    } else {
+        count as f64 / total as f64
+    }
+}
+
 /// Evaluation utilities crate name helper.
 pub fn crate_name() -> &'static str {
     "cpd-eval"
@@ -299,9 +563,10 @@ pub fn crate_name() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::{
-        annotation_error, f1_with_tolerance, hausdorff_distance, offline_metrics, rand_index,
+        annotation_error, f1_with_tolerance, hausdorff_distance, offline_metrics, online_metrics,
+        rand_index, roc_curve_data,
     };
-    use cpd_core::{Diagnostics, OfflineChangePointResult};
+    use cpd_core::{Diagnostics, OfflineChangePointResult, OnlineStepResult};
     use std::borrow::Cow;
 
     fn diagnostics_with_n(n: usize) -> Diagnostics {
@@ -325,6 +590,18 @@ mod tests {
             delta <= 1e-12,
             "expected {expected}, got {actual} (delta={delta})"
         );
+    }
+
+    fn step(t: usize, p_change: f64, alert: bool) -> OnlineStepResult {
+        OnlineStepResult {
+            t,
+            p_change,
+            alert,
+            alert_reason: alert.then(|| "test-threshold".to_string()),
+            run_length_mode: t,
+            run_length_mean: t as f64,
+            processing_latency_us: None,
+        }
     }
 
     #[test]
@@ -450,5 +727,119 @@ mod tests {
 
         let err = f1_with_tolerance(&detected, &truth, 0).expect_err("mismatched n should fail");
         assert!(err.to_string().contains("must share n"));
+    }
+
+    #[test]
+    fn online_metrics_compute_delay_false_alarm_rate_and_arls() {
+        let steps = vec![
+            step(0, 0.1, false),
+            step(1, 0.2, false),
+            step(2, 0.6, true),
+            step(3, 0.2, false),
+            step(4, 0.9, true),
+            step(5, 0.7, true),
+            step(6, 0.1, false),
+            step(7, 0.3, false),
+            step(8, 0.8, true),
+            step(9, 0.1, false),
+        ];
+
+        let metrics = online_metrics(&steps, &[3, 7]).expect("online metrics should compute");
+        assert_approx_eq(
+            metrics
+                .mean_detection_delay
+                .expect("delay should be defined when changes are detected"),
+            1.0,
+        );
+        assert_approx_eq(metrics.false_alarm_rate, 0.2);
+        assert_approx_eq(metrics.arl0, 3.0);
+        assert_approx_eq(
+            metrics
+                .arl1
+                .expect("arl1 should be defined when changes are detected"),
+            2.0,
+        );
+        assert_eq!(metrics.detected_changes, 2);
+        assert_eq!(metrics.missed_changes, 0);
+        assert_eq!(metrics.false_alerts, 2);
+        assert_eq!(metrics.total_alerts, 4);
+        assert!(!metrics.roc_curve.is_empty());
+    }
+
+    #[test]
+    fn online_metrics_reports_misses_and_infinite_arl0_without_false_alerts() {
+        let steps = vec![
+            step(0, 0.1, false),
+            step(1, 0.2, false),
+            step(2, 0.3, false),
+            step(3, 0.1, false),
+            step(4, 0.2, false),
+        ];
+
+        let metrics = online_metrics(&steps, &[2]).expect("online metrics should compute");
+        assert!(metrics.mean_detection_delay.is_none());
+        assert!(metrics.arl1.is_none());
+        assert_approx_eq(metrics.false_alarm_rate, 0.0);
+        assert!(metrics.arl0.is_infinite());
+        assert!(metrics.arl0.is_sign_positive());
+        assert_eq!(metrics.detected_changes, 0);
+        assert_eq!(metrics.missed_changes, 1);
+        assert_eq!(metrics.false_alerts, 0);
+        assert_eq!(metrics.total_alerts, 0);
+    }
+
+    #[test]
+    fn roc_curve_data_matches_threshold_sweep() {
+        let steps = vec![
+            step(0, 0.1, false),
+            step(1, 0.2, false),
+            step(2, 0.6, true),
+            step(3, 0.2, false),
+            step(4, 0.9, true),
+            step(5, 0.7, true),
+            step(6, 0.1, false),
+            step(7, 0.3, false),
+            step(8, 0.8, true),
+            step(9, 0.1, false),
+        ];
+        let thresholds = [0.95, 0.75, 0.55];
+
+        let roc = roc_curve_data(&steps, &[3, 7], &thresholds).expect("roc should compute");
+        assert_eq!(roc.len(), thresholds.len());
+
+        assert_approx_eq(roc[0].true_positive_rate, 0.0);
+        assert_approx_eq(roc[0].false_positive_rate, 0.0);
+        assert_eq!(roc[0].detected_changes, 0);
+        assert_eq!(roc[0].false_alerts, 0);
+
+        assert_approx_eq(roc[1].true_positive_rate, 1.0);
+        assert_approx_eq(roc[1].false_positive_rate, 0.0);
+        assert_eq!(roc[1].detected_changes, 2);
+        assert_eq!(roc[1].false_alerts, 0);
+
+        assert_approx_eq(roc[2].true_positive_rate, 1.0);
+        assert_approx_eq(roc[2].false_positive_rate, 0.2);
+        assert_eq!(roc[2].detected_changes, 2);
+        assert_eq!(roc[2].false_alerts, 2);
+    }
+
+    #[test]
+    fn online_metrics_reject_unsorted_truth_change_points() {
+        let steps = vec![step(0, 0.1, false), step(1, 0.2, true)];
+
+        let err = online_metrics(&steps, &[4, 2]).expect_err("unsorted change points should fail");
+        assert!(err
+            .to_string()
+            .contains("true_change_points must be strictly increasing"));
+    }
+
+    #[test]
+    fn online_metrics_reject_non_monotonic_step_times() {
+        let steps = vec![step(0, 0.1, false), step(0, 0.2, true)];
+
+        let err = online_metrics(&steps, &[0]).expect_err("non-monotonic times should fail");
+        assert!(err
+            .to_string()
+            .contains("OnlineStepResult::t must be strictly increasing"));
     }
 }
