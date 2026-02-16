@@ -255,6 +255,18 @@ def test_bocpd_load_state_rejects_incompatible_model_immediately() -> None:
         target.load_state(state)
 
 
+def test_bocpd_load_state_from_path_rejects_incompatible_model_immediately(tmp_path) -> None:
+    source = cpd.Bocpd(model="gaussian_nig", hazard=1.0 / 200.0, max_run_length=128)
+    for value in [0.0, 0.0, 1.0, 1.0]:
+        source.update(value)
+    path = tmp_path / "bocpd-checkpoint.bin"
+    source.save_state(path=path)
+
+    target = cpd.Bocpd(model="bernoulli_beta", hazard=1.0 / 200.0, max_run_length=128)
+    with pytest.raises(ValueError, match="incompatible Bocpd state"):
+        target.load_state(path=path)
+
+
 def test_streaming_config_rejects_unknown_hazard_and_late_data_keys() -> None:
     with pytest.raises(ValueError, match="unsupported hazard key 'extra'"):
         cpd.Bocpd(hazard={"kind": "constant", "p_change": 0.01, "extra": 1})
