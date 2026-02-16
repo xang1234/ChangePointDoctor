@@ -174,6 +174,10 @@ impl OwnedSeries {
         self.n
     }
 
+    pub(crate) fn n_dims(&self) -> usize {
+        self.d
+    }
+
     pub(crate) fn view(&self) -> Result<TimeSeriesView<'_>, CpdError> {
         let values = match &self.values {
             OwnedValueStorage::F32(values) => DTypeView::F32(values.as_slice()),

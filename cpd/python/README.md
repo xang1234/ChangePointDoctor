@@ -30,8 +30,8 @@ before debugging `pyo3`/linker errors.
 
 `update_many()` now uses a size-aware GIL strategy in Rust bindings:
 
-- Batches with `< 16` samples: keep the GIL (lower overhead for tiny micro-batches).
-- Batches with `>= 16` samples: release the GIL (`py.allow_threads`) for throughput and thread fairness.
+- Workloads with `< 16` scalar work items (`n * d`) keep the GIL (lower overhead for tiny micro-batches).
+- Workloads with `>= 16` scalar work items (`n * d`) release the GIL (`py.allow_threads`) for throughput and thread fairness.
 
 To reproduce the benchmark snapshot used for this policy:
 
@@ -46,15 +46,17 @@ Optional controls:
 - `CPD_PY_STREAMING_PERF_ENFORCE=1`: enable stricter ratio gates.
 - `CPD_PY_STREAMING_PERF_REPORT_OUT=/tmp/cpd-python-streaming-perf.json`: write JSON metrics.
 
-Reference run (local dev machine, `tests/test_streaming_perf_contract.py`):
+The perf contract uses median latency with outlier-triggered retry rounds to reduce scheduler-noise flakiness.
 
-| Batch size | `update()` mean ms | `update_many()` mean ms | `update_many()` speedup vs `update()` |
+Reference run (local dev machine, `tests/test_streaming_perf_contract.py`, median ms):
+
+| Batch size | `update()` median ms | `update_many()` median ms | `update_many()` speedup vs `update()` |
 | --- | ---: | ---: | ---: |
 | 1 | 0.0035 | 0.0097 | 0.36x |
-| 8 | 0.0167 | 0.0184 | 0.91x |
-| 16 | 0.0306 | 0.0268 | 1.14x |
-| 64 | 0.1174 | 0.0790 | 1.48x |
-| 4096 | 7.3775 | 4.2477 | 1.74x |
+| 8 | 0.0177 | 0.0194 | 0.91x |
+| 16 | 0.0356 | 0.0310 | 1.15x |
+| 64 | 0.1308 | 0.0891 | 1.47x |
+| 4096 | 7.8216 | 4.4616 | 1.75x |
 
 ## Masking Risk Guidance
 

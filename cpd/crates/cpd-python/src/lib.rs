@@ -542,10 +542,10 @@ where
         .map_err(cpd_error_to_pyerr)
 }
 
-const UPDATE_MANY_GIL_RELEASE_MIN_BATCH: usize = 16;
+const UPDATE_MANY_GIL_RELEASE_MIN_WORK_ITEMS: usize = 16;
 
-fn should_release_gil_for_update_many(n_samples: usize) -> bool {
-    n_samples >= UPDATE_MANY_GIL_RELEASE_MIN_BATCH
+fn should_release_gil_for_update_many(n_samples: usize, n_dims: usize) -> bool {
+    n_samples.saturating_mul(n_dims.max(1)) >= UPDATE_MANY_GIL_RELEASE_MIN_WORK_ITEMS
 }
 
 fn online_update_many<D>(
@@ -557,7 +557,7 @@ where
     D: OnlineDetector + Send,
 {
     let owned = parse_owned_series(py, x_batch)?;
-    let steps = if should_release_gil_for_update_many(owned.n_samples()) {
+    let steps = if should_release_gil_for_update_many(owned.n_samples(), owned.n_dims()) {
         py.allow_threads(|| {
             let view = owned.view()?;
             let constraints = Constraints::default();
@@ -2040,7 +2040,7 @@ fn _cpd_rs(module: &Bound<'_, PyModule>) -> PyResult<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        _cpd_rs, PyBinseg, PyPelt, SmokeDetector, UPDATE_MANY_GIL_RELEASE_MIN_BATCH,
+        _cpd_rs, PyBinseg, PyPelt, SmokeDetector, UPDATE_MANY_GIL_RELEASE_MIN_WORK_ITEMS,
         should_release_gil_for_update_many, smoke_detect,
     };
     use pyo3::Python;
@@ -2086,19 +2086,23 @@ mod tests {
     }
 
     #[test]
-    fn update_many_gil_policy_uses_small_batch_cutoff() {
-        let cutoff = UPDATE_MANY_GIL_RELEASE_MIN_BATCH;
+    fn update_many_gil_policy_uses_work_item_cutoff() {
+        let cutoff = UPDATE_MANY_GIL_RELEASE_MIN_WORK_ITEMS;
         assert!(
-            !should_release_gil_for_update_many(cutoff.saturating_sub(1)),
+            !should_release_gil_for_update_many(cutoff.saturating_sub(1), 1),
             "batch below cutoff should keep the GIL"
         );
         assert!(
-            should_release_gil_for_update_many(cutoff),
+            should_release_gil_for_update_many(cutoff, 1),
             "batch at cutoff should release the GIL"
         );
         assert!(
-            should_release_gil_for_update_many(cutoff + 1),
+            should_release_gil_for_update_many(cutoff + 1, 1),
             "batch above cutoff should release the GIL"
+        );
+        assert!(
+            should_release_gil_for_update_many(cutoff / 2, 2),
+            "multivariate work at same total item count should release the GIL"
         );
     }
 

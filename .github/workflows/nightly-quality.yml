@@ -128,6 +128,13 @@ jobs:
             tests/test_pelt.py::test_pelt_large_array_smoke \
             tests/test_pelt.py::test_pelt_releases_gil_during_predict
 
+      - name: Run Python streaming perf contract (non-blocking)
+        continue-on-error: true
+        working-directory: cpd/python
+        env:
+          CPD_PY_STREAMING_PERF_REPORT_OUT: ../nightly-python-streaming-perf.json
+        run: pytest -q tests/test_streaming_perf_contract.py
+
       - name: Upload nightly soak metrics artifact
         uses: actions/upload-artifact@v4
         with:
@@ -141,6 +148,14 @@ jobs:
         with:
           name: cpd-online-bocpd-perf-metrics-nightly-1h
           path: cpd/nightly-bocpd-perf-metrics.json
+          if-no-files-found: warn
+
+      - name: Upload Python streaming perf metrics artifact
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: cpd-python-streaming-perf-metrics-nightly-1h
+          path: cpd/nightly-python-streaming-perf.json
           if-no-files-found: warn
 
       - name: Upload CUSUM perf metrics artifact
