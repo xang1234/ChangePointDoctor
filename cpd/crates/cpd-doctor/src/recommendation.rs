@@ -14,10 +14,17 @@ use cpd_online::{
     BernoulliBetaPrior, BocpdConfig, CusumConfig, GaussianNigPrior, ObservationModel,
     PageHinkleyConfig, PoissonGammaPrior,
 };
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 const BINARY_TOLERANCE: f64 = 1.0e-9;
 const FAMILY_THRESHOLD: f64 = 0.98;
+const MAX_CALIBRATION_BINS: usize = 100;
+const CONFIDENCE_FLOOR: f64 = 0.01;
+const CONFIDENCE_CEILING: f64 = 0.99;
+const OOD_GATING_LAMBDA: f64 = 0.90;
+const OOD_GATING_MAX_PENALTY: f64 = 0.80;
+const DEFAULT_CALIBRATION_BINS: usize = 10;
+const CONFIDENCE_FORMULA_TEXT: &str = "confidence = clamp((intercept_family + slope_family * heuristic_confidence) * (1 - ood_penalty), 0.01, 0.99), where ood_penalty = clamp(1 - exp(-0.90 * diagnostic_divergence), 0.0, 0.8)";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Objective {
@@ -25,6 +32,153 @@ pub enum Objective {
     Speed,
     Accuracy,
     Robustness,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum CalibrationFamily {
+    Gaussian,
+    HeavyTailed,
+    Autocorrelated,
+    Seasonal,
+    Multivariate,
+}
+
+impl CalibrationFamily {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Gaussian => "gaussian",
+            Self::HeavyTailed => "heavy_tailed",
+            Self::Autocorrelated => "autocorrelated",
+            Self::Seasonal => "seasonal",
+            Self::Multivariate => "multivariate",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct CalibrationObservation {
+    pub family: CalibrationFamily,
+    pub predicted_confidence: f64,
+    pub top1_within_tolerance: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct FamilyCalibrationMetrics {
+    pub family: CalibrationFamily,
+    pub count: usize,
+    pub ece: f64,
+    pub brier: f64,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct CalibrationMetrics {
+    pub sample_count: usize,
+    pub bins: usize,
+    pub ece: f64,
+    pub brier: f64,
+    pub per_family: Vec<FamilyCalibrationMetrics>,
+}
+
+/// Documented confidence formula used by `recommend`.
+pub fn confidence_formula() -> &'static str {
+    CONFIDENCE_FORMULA_TEXT
+}
+
+/// Offline calibration pipeline utility.
+///
+/// Feed held-out corpus outcomes to compute expected calibration error (ECE) and
+/// Brier score overall and per family.
+pub fn evaluate_calibration(
+    observations: &[CalibrationObservation],
+    bins: Option<usize>,
+) -> Result<CalibrationMetrics, CpdError> {
+    if observations.is_empty() {
+        return Err(CpdError::invalid_input(
+            "calibration requires at least one observation",
+        ));
+    }
+
+    let bins = bins.unwrap_or(DEFAULT_CALIBRATION_BINS);
+    if bins == 0 || bins > MAX_CALIBRATION_BINS {
+        return Err(CpdError::invalid_input(format!(
+            "calibration bins must be in [1, {MAX_CALIBRATION_BINS}], got {bins}"
+        )));
+    }
+
+    for (idx, observation) in observations.iter().enumerate() {
+        let predicted = observation.predicted_confidence;
+        if !predicted.is_finite() || !(0.0..=1.0).contains(&predicted) {
+            return Err(CpdError::invalid_input(format!(
+                "observation[{idx}].predicted_confidence must be finite and within [0, 1], got {predicted}"
+            )));
+        }
+    }
+
+    let (ece, brier) = calibration_errors(observations, bins);
+    let mut grouped = BTreeMap::<CalibrationFamily, Vec<CalibrationObservation>>::new();
+    for observation in observations {
+        grouped
+            .entry(observation.family)
+            .or_default()
+            .push(observation.clone());
+    }
+
+    let mut per_family = Vec::with_capacity(grouped.len());
+    for (family, samples) in grouped {
+        let (family_ece, family_brier) = calibration_errors(&samples, bins);
+        per_family.push(FamilyCalibrationMetrics {
+            family,
+            count: samples.len(),
+            ece: family_ece,
+            brier: family_brier,
+        });
+    }
+
+    Ok(CalibrationMetrics {
+        sample_count: observations.len(),
+        bins,
+        ece,
+        brier,
+        per_family,
+    })
+}
+
+fn calibration_errors(observations: &[CalibrationObservation], bins: usize) -> (f64, f64) {
+    if observations.is_empty() {
+        return (0.0, 0.0);
+    }
+
+    let mut bucket_count = vec![0usize; bins];
+    let mut bucket_confidence = vec![0.0; bins];
+    let mut bucket_accuracy = vec![0.0; bins];
+    let mut brier_sum = 0.0;
+
+    for observation in observations {
+        let idx = ((observation.predicted_confidence * bins as f64).floor() as usize).min(bins - 1);
+        let observed = if observation.top1_within_tolerance {
+            1.0
+        } else {
+            0.0
+        };
+        bucket_count[idx] = bucket_count[idx].saturating_add(1);
+        bucket_confidence[idx] += observation.predicted_confidence;
+        bucket_accuracy[idx] += observed;
+        brier_sum += (observation.predicted_confidence - observed).powi(2);
+    }
+
+    let total = observations.len() as f64;
+    let mut ece = 0.0;
+    for bucket in 0..bins {
+        if bucket_count[bucket] == 0 {
+            continue;
+        }
+        let inv = 1.0 / bucket_count[bucket] as f64;
+        let avg_confidence = bucket_confidence[bucket] * inv;
+        let avg_accuracy = bucket_accuracy[bucket] * inv;
+        ece += (bucket_count[bucket] as f64 / total) * (avg_accuracy - avg_confidence).abs();
+    }
+
+    (ece, brier_sum / total)
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -158,6 +312,44 @@ struct SignalFlags {
     conflicting_signals: bool,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct CalibrationRange {
+    lower: f64,
+    upper: f64,
+    weight: f64,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct CalibrationProfile {
+    family: CalibrationFamily,
+    intercept: f64,
+    slope: f64,
+    nan_rate: CalibrationRange,
+    kurtosis_proxy: CalibrationRange,
+    outlier_rate_iqr: CalibrationRange,
+    mad_to_std_ratio: CalibrationRange,
+    lag1_autocorr: CalibrationRange,
+    change_density_score: CalibrationRange,
+    regime_change_proxy: CalibrationRange,
+    dominant_period_strength: CalibrationRange,
+}
+
+#[derive(Clone, Debug)]
+struct CalibrationAssessment {
+    family: CalibrationFamily,
+    raw_confidence: f64,
+    calibrated_confidence: f64,
+    final_confidence: f64,
+    diagnostic_divergence: f64,
+    ood_penalty: f64,
+    ood_signals: Vec<String>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ConfidenceContext {
+    profile: CalibrationProfile,
+}
+
 #[derive(Clone, Debug)]
 struct Candidate {
     pipeline: PipelineConfig,
@@ -177,6 +369,7 @@ struct ScoredRecommendation {
     recommendation: Recommendation,
     final_score: f64,
     pipeline_id: String,
+    confidence: CalibrationAssessment,
 }
 
 pub fn recommend(
@@ -201,6 +394,14 @@ pub fn recommend(
     let data_hints = sample_data_hints(x, diagnostics.subsample_stride.max(1), BINARY_TOLERANCE)?;
     let flags = signal_flags(x, &diagnostics.summary);
     let strongest_signal = strongest_active_signal(&diagnostics.summary, flags, data_hints);
+    let confidence_context = ConfidenceContext {
+        profile: calibration_profile(select_calibration_family(
+            &diagnostics.summary,
+            flags,
+            data_hints,
+            x.d,
+        )),
+    };
 
     let candidates = build_candidates(x, objective, online, &base_constraints, flags, data_hints);
     let mut scored = candidates
@@ -213,6 +414,8 @@ pub fn recommend(
                 diagnostics.used_subsampling,
                 flags,
                 strongest_signal,
+                confidence_context,
+                x.d,
             )
         })
         .collect::<Vec<_>>();
@@ -228,21 +431,16 @@ pub fn recommend(
             .then_with(|| a.pipeline_id.cmp(&b.pipeline_id))
     });
 
-    let mut recommendations = scored
-        .into_iter()
-        .take(5)
-        .map(|entry| entry.recommendation)
-        .collect::<Vec<_>>();
-
-    if recommendations.is_empty() {
+    if scored.is_empty() {
         return Err(CpdError::invalid_input(
             "recommendation engine failed to produce any candidates",
         ));
     }
 
-    let top_confidence = recommendations[0].confidence;
+    let top_confidence = scored[0].recommendation.confidence;
     if allow_abstain && top_confidence < min_confidence {
         let safe_candidate = build_safe_baseline_candidate(x, online, &base_constraints, flags);
+        let top_confidence_assessment = scored[0].confidence.clone();
         let mut safe = score_candidate(
             &safe_candidate,
             objective,
@@ -250,13 +448,15 @@ pub fn recommend(
             diagnostics.used_subsampling,
             flags,
             strongest_signal,
+            confidence_context,
+            x.d,
         )
         .recommendation;
-        safe.abstain_reason = Some(format!(
-            "top confidence {:.3} below min_confidence {:.3}; drivers: {}",
+        safe.abstain_reason = Some(abstain_reason(
+            &top_confidence_assessment,
+            &diagnostics.summary,
             top_confidence,
             min_confidence,
-            top_driver_summary(&diagnostics.summary)
         ));
         safe.warnings.push(
             "returned safe baseline because allow_abstain=true and threshold was not met"
@@ -266,11 +466,17 @@ pub fn recommend(
     }
 
     if !allow_abstain && top_confidence < min_confidence {
-        recommendations[0].warnings.push(format!(
+        scored[0].recommendation.warnings.push(format!(
             "top confidence {:.3} is below min_confidence {:.3}; abstain disabled",
             top_confidence, min_confidence
         ));
     }
+
+    let recommendations = scored
+        .into_iter()
+        .take(5)
+        .map(|entry| entry.recommendation)
+        .collect::<Vec<_>>();
 
     Ok(recommendations)
 }
@@ -282,18 +488,38 @@ fn score_candidate(
     used_subsampling: bool,
     flags: SignalFlags,
     strongest_signal: Option<SignalKind>,
+    confidence_context: ConfidenceContext,
+    dimension_count: usize,
 ) -> ScoredRecommendation {
     let objective_fit = objective_fit(candidate.profile);
     let selected_objective_score = objective_score(candidate.profile, objective);
 
-    let confidence = confidence_score(
+    let raw_confidence = confidence_score(
         candidate,
         objective,
         used_subsampling,
         flags,
         strongest_signal,
     );
-    let confidence_interval = confidence_interval(confidence, flags.conflicting_signals);
+    let confidence_assessment =
+        assess_confidence(raw_confidence, summary, confidence_context, dimension_count);
+    let confidence = confidence_assessment.final_confidence;
+    let confidence_interval = confidence_interval(
+        confidence,
+        flags.conflicting_signals,
+        confidence_assessment.ood_penalty,
+    );
+    let mut warnings = candidate.warnings.clone();
+    if confidence_assessment.ood_penalty > 0.0 {
+        warnings.push(format!(
+            "confidence reduced by OOD gating (family={}, divergence={:.3}, penalty={:.3}, raw={:.3}, calibrated={:.3})",
+            confidence_assessment.family.as_str(),
+            confidence_assessment.diagnostic_divergence,
+            confidence_assessment.ood_penalty,
+            confidence_assessment.raw_confidence,
+            confidence_assessment.calibrated_confidence
+        ));
+    }
 
     let explanation = build_explanation(candidate, summary);
     let final_score =
@@ -302,10 +528,11 @@ fn score_candidate(
     ScoredRecommendation {
         pipeline_id: candidate.pipeline_id.clone(),
         final_score,
+        confidence: confidence_assessment,
         recommendation: Recommendation {
             pipeline: candidate.pipeline.clone(),
             resource_estimate: resource_estimate(&candidate.pipeline),
-            warnings: candidate.warnings.clone(),
+            warnings,
             explanation,
             validation: None,
             confidence,
@@ -385,10 +612,457 @@ fn confidence_score(
     confidence.clamp(0.05, 0.95)
 }
 
-fn confidence_interval(confidence: f64, conflicting_signals: bool) -> (f64, f64) {
-    let half_width =
-        (0.10 + 0.25 * (1.0 - confidence) + if conflicting_signals { 0.05 } else { 0.0 })
-            .clamp(0.08, 0.40);
+fn select_calibration_family(
+    summary: &DiagnosticsSummary,
+    flags: SignalFlags,
+    hints: DataHints,
+    dimension_count: usize,
+) -> CalibrationFamily {
+    if dimension_count >= 4 {
+        return CalibrationFamily::Multivariate;
+    }
+
+    let seasonal_strength = strongest_period_strength(summary);
+    let heavy_tail_score = (summary.kurtosis_proxy / 4.0)
+        .max(summary.outlier_rate_iqr / 0.02)
+        .max(if summary.mad_to_std_ratio <= 0.80 {
+            0.80 / summary.mad_to_std_ratio.max(1.0e-12)
+        } else {
+            0.0
+        });
+    let autocorr_score = (summary.lag1_autocorr / 0.55)
+        .max(summary.lagk_autocorr / 0.45)
+        .max(summary.residual_lag1_autocorr / 0.40);
+
+    if seasonal_strength >= 0.40 {
+        return CalibrationFamily::Seasonal;
+    }
+    if hints.binary_like || hints.count_like || flags.autocorrelated {
+        if heavy_tail_score > autocorr_score + 0.25 {
+            return CalibrationFamily::HeavyTailed;
+        }
+        return CalibrationFamily::Autocorrelated;
+    }
+    if flags.heavy_tail {
+        return CalibrationFamily::HeavyTailed;
+    }
+    CalibrationFamily::Gaussian
+}
+
+fn strongest_period_strength(summary: &DiagnosticsSummary) -> f64 {
+    summary
+        .dominant_period_hints
+        .iter()
+        .map(|hint| hint.strength)
+        .fold(0.0, f64::max)
+}
+
+fn calibration_profile(family: CalibrationFamily) -> CalibrationProfile {
+    let unit_weight = 1.0;
+    match family {
+        CalibrationFamily::Gaussian => CalibrationProfile {
+            family,
+            intercept: 0.04,
+            slope: 0.90,
+            nan_rate: CalibrationRange {
+                lower: 0.0,
+                upper: 0.08,
+                weight: unit_weight,
+            },
+            kurtosis_proxy: CalibrationRange {
+                lower: 1.8,
+                upper: 4.8,
+                weight: unit_weight,
+            },
+            outlier_rate_iqr: CalibrationRange {
+                lower: 0.0,
+                upper: 0.04,
+                weight: 0.9,
+            },
+            mad_to_std_ratio: CalibrationRange {
+                lower: 0.85,
+                upper: 1.35,
+                weight: 0.7,
+            },
+            lag1_autocorr: CalibrationRange {
+                lower: -0.20,
+                upper: 0.45,
+                weight: 0.8,
+            },
+            change_density_score: CalibrationRange {
+                lower: 0.03,
+                upper: 0.38,
+                weight: 0.8,
+            },
+            regime_change_proxy: CalibrationRange {
+                lower: 0.05,
+                upper: 1.30,
+                weight: 0.7,
+            },
+            dominant_period_strength: CalibrationRange {
+                lower: 0.0,
+                upper: 0.35,
+                weight: 0.5,
+            },
+        },
+        CalibrationFamily::HeavyTailed => CalibrationProfile {
+            family,
+            intercept: 0.03,
+            slope: 0.88,
+            nan_rate: CalibrationRange {
+                lower: 0.0,
+                upper: 0.12,
+                weight: unit_weight,
+            },
+            kurtosis_proxy: CalibrationRange {
+                lower: 3.0,
+                upper: 12.0,
+                weight: 1.1,
+            },
+            outlier_rate_iqr: CalibrationRange {
+                lower: 0.01,
+                upper: 0.20,
+                weight: unit_weight,
+            },
+            mad_to_std_ratio: CalibrationRange {
+                lower: 0.15,
+                upper: 0.95,
+                weight: unit_weight,
+            },
+            lag1_autocorr: CalibrationRange {
+                lower: -0.20,
+                upper: 0.50,
+                weight: 0.6,
+            },
+            change_density_score: CalibrationRange {
+                lower: 0.02,
+                upper: 0.45,
+                weight: 0.7,
+            },
+            regime_change_proxy: CalibrationRange {
+                lower: 0.05,
+                upper: 1.80,
+                weight: 0.7,
+            },
+            dominant_period_strength: CalibrationRange {
+                lower: 0.0,
+                upper: 0.45,
+                weight: 0.5,
+            },
+        },
+        CalibrationFamily::Autocorrelated => CalibrationProfile {
+            family,
+            intercept: 0.04,
+            slope: 0.89,
+            nan_rate: CalibrationRange {
+                lower: 0.0,
+                upper: 0.12,
+                weight: unit_weight,
+            },
+            kurtosis_proxy: CalibrationRange {
+                lower: 1.5,
+                upper: 6.5,
+                weight: 0.7,
+            },
+            outlier_rate_iqr: CalibrationRange {
+                lower: 0.0,
+                upper: 0.08,
+                weight: 0.7,
+            },
+            mad_to_std_ratio: CalibrationRange {
+                lower: 0.60,
+                upper: 1.30,
+                weight: 0.8,
+            },
+            lag1_autocorr: CalibrationRange {
+                lower: 0.35,
+                upper: 0.98,
+                weight: 1.2,
+            },
+            change_density_score: CalibrationRange {
+                lower: 0.01,
+                upper: 0.42,
+                weight: 0.7,
+            },
+            regime_change_proxy: CalibrationRange {
+                lower: 0.05,
+                upper: 1.60,
+                weight: 0.7,
+            },
+            dominant_period_strength: CalibrationRange {
+                lower: 0.0,
+                upper: 0.65,
+                weight: 0.6,
+            },
+        },
+        CalibrationFamily::Seasonal => CalibrationProfile {
+            family,
+            intercept: 0.05,
+            slope: 0.86,
+            nan_rate: CalibrationRange {
+                lower: 0.0,
+                upper: 0.10,
+                weight: unit_weight,
+            },
+            kurtosis_proxy: CalibrationRange {
+                lower: 1.5,
+                upper: 7.0,
+                weight: 0.8,
+            },
+            outlier_rate_iqr: CalibrationRange {
+                lower: 0.0,
+                upper: 0.08,
+                weight: 0.8,
+            },
+            mad_to_std_ratio: CalibrationRange {
+                lower: 0.55,
+                upper: 1.35,
+                weight: 0.8,
+            },
+            lag1_autocorr: CalibrationRange {
+                lower: 0.10,
+                upper: 0.95,
+                weight: 0.9,
+            },
+            change_density_score: CalibrationRange {
+                lower: 0.01,
+                upper: 0.55,
+                weight: 0.6,
+            },
+            regime_change_proxy: CalibrationRange {
+                lower: 0.05,
+                upper: 1.80,
+                weight: 0.6,
+            },
+            dominant_period_strength: CalibrationRange {
+                lower: 0.25,
+                upper: 1.0,
+                weight: 1.4,
+            },
+        },
+        CalibrationFamily::Multivariate => CalibrationProfile {
+            family,
+            intercept: 0.06,
+            slope: 0.84,
+            nan_rate: CalibrationRange {
+                lower: 0.0,
+                upper: 0.15,
+                weight: unit_weight,
+            },
+            kurtosis_proxy: CalibrationRange {
+                lower: 1.2,
+                upper: 9.0,
+                weight: 0.8,
+            },
+            outlier_rate_iqr: CalibrationRange {
+                lower: 0.0,
+                upper: 0.12,
+                weight: 0.8,
+            },
+            mad_to_std_ratio: CalibrationRange {
+                lower: 0.45,
+                upper: 1.45,
+                weight: 0.9,
+            },
+            lag1_autocorr: CalibrationRange {
+                lower: -0.25,
+                upper: 0.90,
+                weight: 0.8,
+            },
+            change_density_score: CalibrationRange {
+                lower: 0.01,
+                upper: 0.55,
+                weight: 0.8,
+            },
+            regime_change_proxy: CalibrationRange {
+                lower: 0.05,
+                upper: 2.00,
+                weight: 0.8,
+            },
+            dominant_period_strength: CalibrationRange {
+                lower: 0.0,
+                upper: 0.75,
+                weight: 0.7,
+            },
+        },
+    }
+}
+
+fn assess_confidence(
+    raw_confidence: f64,
+    summary: &DiagnosticsSummary,
+    confidence_context: ConfidenceContext,
+    dimension_count: usize,
+) -> CalibrationAssessment {
+    let profile = confidence_context.profile;
+    let calibrated_confidence = (profile.intercept + profile.slope * raw_confidence)
+        .clamp(CONFIDENCE_FLOOR, CONFIDENCE_CEILING);
+    let (diagnostic_divergence, ood_signals) =
+        diagnostic_divergence(summary, profile, dimension_count);
+    let ood_penalty = (1.0 - (-OOD_GATING_LAMBDA * diagnostic_divergence).exp())
+        .clamp(0.0, OOD_GATING_MAX_PENALTY);
+    let final_confidence =
+        (calibrated_confidence * (1.0 - ood_penalty)).clamp(CONFIDENCE_FLOOR, CONFIDENCE_CEILING);
+
+    CalibrationAssessment {
+        family: profile.family,
+        raw_confidence,
+        calibrated_confidence,
+        final_confidence,
+        diagnostic_divergence,
+        ood_penalty,
+        ood_signals,
+    }
+}
+
+fn diagnostic_divergence(
+    summary: &DiagnosticsSummary,
+    profile: CalibrationProfile,
+    dimension_count: usize,
+) -> (f64, Vec<String>) {
+    let dominant_period_strength = strongest_period_strength(summary);
+    let features = [
+        ("nan_rate", summary.nan_rate, profile.nan_rate),
+        (
+            "kurtosis_proxy",
+            summary.kurtosis_proxy,
+            profile.kurtosis_proxy,
+        ),
+        (
+            "outlier_rate_iqr",
+            summary.outlier_rate_iqr,
+            profile.outlier_rate_iqr,
+        ),
+        (
+            "mad_to_std_ratio",
+            summary.mad_to_std_ratio,
+            profile.mad_to_std_ratio,
+        ),
+        (
+            "lag1_autocorr",
+            summary.lag1_autocorr,
+            profile.lag1_autocorr,
+        ),
+        (
+            "change_density_score",
+            summary.change_density_score,
+            profile.change_density_score,
+        ),
+        (
+            "regime_change_proxy",
+            summary.regime_change_proxy,
+            profile.regime_change_proxy,
+        ),
+        (
+            "dominant_period_strength",
+            dominant_period_strength,
+            profile.dominant_period_strength,
+        ),
+    ];
+
+    let mut weighted_divergence = 0.0;
+    let mut total_weight = 0.0;
+    let mut ood_signals = Vec::new();
+
+    for (name, value, range) in features {
+        let (divergence, reason) = range_divergence(name, value, range);
+        weighted_divergence += range.weight * divergence;
+        total_weight += range.weight;
+        if let Some(reason) = reason {
+            ood_signals.push(reason);
+        }
+    }
+
+    if summary.missing_pattern == MissingPattern::Block {
+        weighted_divergence += 0.8;
+        total_weight += 1.0;
+        ood_signals.push("missing_pattern=block outside calibration support".to_string());
+    }
+
+    if dimension_count > 0 {
+        let coverage = summary.valid_dimensions as f64 / dimension_count as f64;
+        if coverage < 0.70 {
+            let divergence = ((0.70 - coverage) / 0.70).clamp(0.0, 3.0);
+            weighted_divergence += divergence;
+            total_weight += 1.0;
+            ood_signals.push(format!(
+                "valid_dimension_coverage={coverage:.3} below calibration minimum 0.700"
+            ));
+        }
+    }
+
+    if summary.longest_nan_run > 512 {
+        let run_divergence = ((summary.longest_nan_run as f64 - 512.0) / 512.0).clamp(0.0, 3.0);
+        weighted_divergence += 0.8 * run_divergence;
+        total_weight += 0.8;
+        ood_signals.push(format!(
+            "longest_nan_run={} exceeds calibration support up to 512",
+            summary.longest_nan_run
+        ));
+    }
+
+    let diagnostic_divergence = if total_weight <= 0.0 {
+        0.0
+    } else {
+        weighted_divergence / total_weight
+    };
+    (diagnostic_divergence.max(0.0), ood_signals)
+}
+
+fn range_divergence(name: &str, value: f64, range: CalibrationRange) -> (f64, Option<String>) {
+    let width = (range.upper - range.lower).abs().max(1.0e-9);
+    if value < range.lower {
+        let divergence = ((range.lower - value) / width).clamp(0.0, 3.0);
+        (
+            divergence,
+            Some(format!(
+                "{name}={value:.3} outside [{:.3}, {:.3}]",
+                range.lower, range.upper
+            )),
+        )
+    } else if value > range.upper {
+        let divergence = ((value - range.upper) / width).clamp(0.0, 3.0);
+        (
+            divergence,
+            Some(format!(
+                "{name}={value:.3} outside [{:.3}, {:.3}]",
+                range.lower, range.upper
+            )),
+        )
+    } else {
+        (0.0, None)
+    }
+}
+
+fn abstain_reason(
+    confidence: &CalibrationAssessment,
+    summary: &DiagnosticsSummary,
+    top_confidence: f64,
+    min_confidence: f64,
+) -> String {
+    if confidence.ood_signals.is_empty() {
+        format!(
+            "top confidence {:.3} below min_confidence {:.3}; drivers: {}",
+            top_confidence,
+            min_confidence,
+            top_driver_summary(summary)
+        )
+    } else {
+        format!(
+            "diagnostics outside calibration support: {}; adjusted confidence {:.3} below min_confidence {:.3}",
+            confidence.ood_signals.join("; "),
+            top_confidence,
+            min_confidence
+        )
+    }
+}
+
+fn confidence_interval(confidence: f64, conflicting_signals: bool, ood_penalty: f64) -> (f64, f64) {
+    let half_width = (0.10
+        + 0.25 * (1.0 - confidence)
+        + if conflicting_signals { 0.05 } else { 0.0 }
+        + 0.20 * ood_penalty)
+        .clamp(0.08, 0.45);
     (
         (confidence - half_width).max(0.0),
         (confidence + half_width).min(1.0),
@@ -1332,8 +2006,9 @@ fn pipeline_id(pipeline: &PipelineConfig) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        Objective, OfflineCostKind, OfflineDetectorConfig, OnlineDetectorConfig, PipelineConfig,
-        recommend,
+        CalibrationFamily, CalibrationObservation, Objective, OfflineCostKind,
+        OfflineDetectorConfig, OnlineDetectorConfig, PipelineConfig, confidence_formula,
+        evaluate_calibration, recommend,
     };
     use cpd_core::{Constraints, MemoryLayout, MissingPolicy, TimeIndex, TimeSeriesView};
     use cpd_online::ObservationModel;
@@ -1525,6 +2200,26 @@ mod tests {
     }
 
     #[test]
+    fn recommend_in_distribution_confidence_is_reasonable() {
+        let mut state = 314_159_u64;
+        let values = (0..4_096)
+            .map(|_| pseudo_uniform_noise(&mut state))
+            .collect::<Vec<_>>();
+        let view = make_univariate_view(&values);
+
+        let recommendations =
+            recommend(&view, Objective::Balanced, false, None, 0.35, true).expect("recommend");
+
+        assert!(!recommendations.is_empty());
+        assert!(recommendations[0].abstain_reason.is_none());
+        assert!(
+            recommendations[0].confidence >= 0.45,
+            "expected calibrated in-distribution confidence >= 0.45, got {}",
+            recommendations[0].confidence
+        );
+    }
+
+    #[test]
     fn recommend_abstains_with_safe_baseline_when_threshold_not_met() {
         let values = vec![0.0; 256];
         let view = make_univariate_view(&values);
@@ -1542,6 +2237,40 @@ mod tests {
             } => {}
             other => panic!("unexpected abstain-safe recommendation: {other:?}"),
         }
+    }
+
+    #[test]
+    fn recommend_ood_gating_reduces_confidence_and_sets_abstain_reason() {
+        let n = 4_096;
+        let mut values = vec![0.0; n];
+        for idx in 0..n {
+            if idx % 11 == 0 {
+                values[idx] = 40.0;
+            } else if idx > n / 2 {
+                values[idx] = -10.0;
+            }
+        }
+        let mut mask = vec![0_u8; n];
+        for item in mask.iter_mut().take(3_100).skip(700) {
+            *item = 1;
+        }
+        let view = make_univariate_view_with_mask(&values, &mask);
+
+        let recommendations =
+            recommend(&view, Objective::Balanced, false, None, 0.55, true).expect("recommend");
+
+        assert_eq!(recommendations.len(), 1);
+        let reason = recommendations[0]
+            .abstain_reason
+            .as_ref()
+            .expect("expected abstain reason");
+        assert!(reason.contains("diagnostics outside calibration support"));
+        assert!(
+            recommendations[0]
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("OOD gating"))
+        );
     }
 
     #[test]
@@ -1769,5 +2498,68 @@ mod tests {
             path_ids.len(),
             path_ids
         );
+    }
+
+    #[test]
+    fn evaluate_calibration_reports_global_and_per_family_metrics() {
+        let observations = vec![
+            CalibrationObservation {
+                family: CalibrationFamily::Gaussian,
+                predicted_confidence: 0.80,
+                top1_within_tolerance: true,
+            },
+            CalibrationObservation {
+                family: CalibrationFamily::Gaussian,
+                predicted_confidence: 0.70,
+                top1_within_tolerance: true,
+            },
+            CalibrationObservation {
+                family: CalibrationFamily::Gaussian,
+                predicted_confidence: 0.40,
+                top1_within_tolerance: false,
+            },
+            CalibrationObservation {
+                family: CalibrationFamily::HeavyTailed,
+                predicted_confidence: 0.90,
+                top1_within_tolerance: false,
+            },
+            CalibrationObservation {
+                family: CalibrationFamily::HeavyTailed,
+                predicted_confidence: 0.65,
+                top1_within_tolerance: true,
+            },
+            CalibrationObservation {
+                family: CalibrationFamily::HeavyTailed,
+                predicted_confidence: 0.55,
+                top1_within_tolerance: false,
+            },
+        ];
+
+        let metrics = evaluate_calibration(&observations, Some(5)).expect("metrics");
+        assert_eq!(metrics.sample_count, observations.len());
+        assert_eq!(metrics.bins, 5);
+        assert!(metrics.ece > 0.0);
+        assert!(metrics.brier > 0.0);
+        assert_eq!(metrics.per_family.len(), 2);
+        assert!(metrics.per_family.iter().all(|family| family.count == 3));
+    }
+
+    #[test]
+    fn evaluate_calibration_rejects_invalid_probabilities() {
+        let observations = vec![CalibrationObservation {
+            family: CalibrationFamily::Gaussian,
+            predicted_confidence: 1.1,
+            top1_within_tolerance: true,
+        }];
+        let err = evaluate_calibration(&observations, Some(10))
+            .expect_err("invalid confidence should fail");
+        assert!(err.to_string().contains("predicted_confidence"));
+    }
+
+    #[test]
+    fn confidence_formula_mentions_ood_penalty() {
+        let formula = confidence_formula();
+        assert!(formula.contains("ood_penalty"));
+        assert!(formula.contains("diagnostic_divergence"));
     }
 }
