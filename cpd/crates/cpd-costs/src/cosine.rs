@@ -45,6 +45,7 @@ impl CosineCache {
         self.n + 1
     }
 
+    #[cfg(test)]
     fn dim_offset(&self, dim: usize) -> usize {
         dim * self.prefix_len_per_dim()
     }
@@ -195,6 +196,42 @@ fn stable_l2_norm(values: &[f64]) -> f64 {
     }
 }
 
+fn stable_l2_norm_prefix_diff(
+    prefix_values: &[f64],
+    d: usize,
+    prefix_len_per_dim: usize,
+    start: usize,
+    end: usize,
+) -> f64 {
+    let mut scale = 0.0;
+    let mut sumsq = 1.0;
+    let mut has_nonzero = false;
+
+    for dim in 0..d {
+        let base = dim * prefix_len_per_dim;
+        let value = prefix_values[base + end] - prefix_values[base + start];
+        let x = value.abs();
+        if x == 0.0 {
+            continue;
+        }
+        has_nonzero = true;
+        if scale < x {
+            let ratio = if scale == 0.0 { 0.0 } else { scale / x };
+            sumsq = 1.0 + sumsq * ratio * ratio;
+            scale = x;
+        } else {
+            let ratio = x / scale;
+            sumsq += ratio * ratio;
+        }
+    }
+
+    if !has_nonzero {
+        0.0
+    } else {
+        scale * sumsq.sqrt()
+    }
+}
+
 impl CostModel for CostCosine {
     type Cache = CosineCache;
 
@@ -227,6 +264,18 @@ impl CostModel for CostCosine {
                 x.n_missing()
             )));
         }
+
+        for t in 0..x.n {
+            for dim in 0..x.d {
+                let value = read_value(x, t, dim)?;
+                if !value.is_finite() {
+                    return Err(CpdError::invalid_input(format!(
+                        "CostCosine requires finite values; got value={value} at t={t}, dim={dim}"
+                    )));
+                }
+            }
+        }
+
         match x.values {
             DTypeView::F32(_) | DTypeView::F64(_) => Ok(()),
         }
@@ -339,13 +388,13 @@ impl CostModel for CostCosine {
         );
 
         let m = (end - start) as f64;
-        let mut resultant = vec![0.0; cache.d];
-        for (dim, slot) in resultant.iter_mut().enumerate() {
-            let base = cache.dim_offset(dim);
-            *slot = cache.prefix_unit_sum[base + end] - cache.prefix_unit_sum[base + start];
-        }
-
-        let resultant_norm = stable_l2_norm(&resultant);
+        let resultant_norm = stable_l2_norm_prefix_diff(
+            &cache.prefix_unit_sum,
+            cache.d,
+            cache.prefix_len_per_dim(),
+            start,
+            end,
+        );
         (m - resultant_norm).max(0.0)
     }
 }
@@ -354,7 +403,7 @@ impl CostModel for CostCosine {
 mod tests {
     use super::{
         CosineCache, CostCosine, cache_overflow_err, read_value, stable_l2_norm,
-        strided_linear_index,
+        stable_l2_norm_prefix_diff, strided_linear_index,
     };
     use crate::model::CostModel;
     use cpd_core::{
@@ -560,6 +609,32 @@ mod tests {
         assert_close(stable_l2_norm(&[]), 0.0, 0.0);
         assert_close(stable_l2_norm(&[0.0, 0.0, 0.0]), 0.0, 0.0);
         assert_close(stable_l2_norm(&[3.0, 4.0]), 5.0, 1e-12);
+    }
+
+    #[test]
+    fn prefix_diff_norm_matches_direct_norm() {
+        let n = 4usize;
+        let d = 2usize;
+        let prefix_len = n + 1;
+        let mut prefix = vec![0.0; prefix_len * d];
+
+        let rows = [[1.0, 2.0], [0.0, 1.0], [2.0, 1.0], [3.0, 0.0]];
+        let mut running = [0.0_f64, 0.0_f64];
+        for (t, row) in rows.iter().enumerate() {
+            running[0] += row[0];
+            running[1] += row[1];
+            prefix[t + 1] = running[0];
+            prefix[prefix_len + t + 1] = running[1];
+        }
+
+        let start = 1usize;
+        let end = 4usize;
+        let direct = stable_l2_norm(&[
+            prefix[end] - prefix[start],
+            prefix[prefix_len + end] - prefix[prefix_len + start],
+        ]);
+        let from_prefix = stable_l2_norm_prefix_diff(&prefix, d, prefix_len, start, end);
+        assert_close(direct, from_prefix, 1e-12);
     }
 
     #[test]

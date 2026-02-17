@@ -167,6 +167,8 @@ fn cache_overflow_err(n: usize, d: usize) -> CpdError {
 
 fn assign_average_ranks(values: &[f64]) -> Vec<f64> {
     let n = values.len();
+    // Use IEEE total ordering to keep deterministic ordering for edge cases
+    // (including signed zero and NaN payload ordering).
     let mut order: Vec<usize> = (0..n).collect();
     order.sort_by(|&a, &b| values[a].total_cmp(&values[b]).then_with(|| a.cmp(&b)));
 
@@ -402,6 +404,14 @@ mod tests {
         for (actual, expected) in ranks.iter().zip(expected) {
             assert_close(*actual, expected, 1e-12);
         }
+    }
+
+    #[test]
+    fn signed_zero_ordering_is_stable_and_distinct() {
+        let ranks = assign_average_ranks(&[-0.0, 0.0, 1.0]);
+        assert_eq!(ranks[0], 1.0);
+        assert_eq!(ranks[1], 2.0);
+        assert_eq!(ranks[2], 3.0);
     }
 
     #[test]
