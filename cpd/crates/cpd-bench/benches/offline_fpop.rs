@@ -72,6 +72,17 @@ fn bench_pelt_fpop_pair(
     )
     .expect("FPOP config should be valid");
 
+    let pelt_result = pelt
+        .detect(&view, &ctx)
+        .expect("PELT parity precheck should succeed");
+    let fpop_result = fpop
+        .detect(&view, &ctx)
+        .expect("FPOP parity precheck should succeed");
+    assert_eq!(
+        fpop_result.breakpoints, pelt_result.breakpoints,
+        "FPOP/PELT parity mismatch for case={case_suffix}"
+    );
+
     c.bench_function(&format!("pelt_l2_{case_suffix}"), |b| {
         b.iter(|| {
             pelt.detect(black_box(&view), black_box(&ctx))

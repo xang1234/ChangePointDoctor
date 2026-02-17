@@ -2,16 +2,20 @@
 
 #![forbid(unsafe_code)]
 
-use crate::{Pelt, PeltConfig};
 use cpd_core::{
-    CpdError, ExecutionContext, OfflineChangePointResult, OfflineDetector, Penalty, Stopping,
-    TimeSeriesView, validate_stopping,
+    BudgetStatus, CpdError, Diagnostics, ExecutionContext, OfflineChangePointResult,
+    OfflineDetector, Penalty, PruningStats, Stopping, TimeSeriesView, ValidatedConstraints,
+    check_missing_compatibility, penalty_value, validate_constraints, validate_stopping,
 };
-use cpd_costs::CostModel;
+use cpd_costs::{CostL2Mean, CostModel};
 use std::borrow::Cow;
+use std::collections::HashMap;
+use std::time::Instant;
 
 const DEFAULT_CANCEL_CHECK_EVERY: usize = 1000;
 const DEFAULT_PARAMS_PER_SEGMENT: usize = 2;
+const KNOWN_K_MAX_DOUBLINGS: usize = 80;
+const KNOWN_K_MAX_BISECTION_ITERS: usize = 64;
 
 /// Configuration for [`Fpop`].
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -44,25 +48,29 @@ impl FpopConfig {
 
         Ok(())
     }
+
+    fn normalized_cancel_check_every(&self) -> usize {
+        self.cancel_check_every.max(1)
+    }
 }
 
 /// Functional Pruning Optimal Partitioning detector for L2 mean costs.
 ///
-/// This detector is currently restricted to cost models whose `name()` is
-/// `"l2_mean"` and reuses the exact optimal-partitioning kernel used by PELT.
-#[derive(Debug)]
-pub struct Fpop<C: CostModel + Clone> {
-    cost_model: C,
+/// `Fpop` is L2-specific by construction and currently uses exact
+/// optimal-partitioning dynamics with aggressive candidate pruning.
+#[derive(Debug, Clone)]
+pub struct Fpop {
+    cost_model: CostL2Mean,
     config: FpopConfig,
 }
 
-impl<C: CostModel + Clone> Fpop<C> {
-    pub fn new(cost_model: C, config: FpopConfig) -> Result<Self, CpdError> {
+impl Fpop {
+    pub fn new(cost_model: CostL2Mean, config: FpopConfig) -> Result<Self, CpdError> {
         config.validate()?;
         Ok(Self { cost_model, config })
     }
 
-    pub fn cost_model(&self) -> &C {
+    pub fn cost_model(&self) -> &CostL2Mean {
         &self.cost_model
     }
 
@@ -71,7 +79,671 @@ impl<C: CostModel + Clone> Fpop<C> {
     }
 }
 
-impl<C: CostModel + Clone> OfflineDetector for Fpop<C> {
+#[derive(Clone, Debug)]
+struct KernelResult {
+    breakpoints: Vec<usize>,
+    change_count: usize,
+    objective: f64,
+    cost_evals: usize,
+    candidates_considered: usize,
+    candidates_pruned: usize,
+}
+
+#[derive(Default, Clone, Copy, Debug)]
+struct RuntimeStats {
+    cost_evals: usize,
+    candidates_considered: usize,
+    candidates_pruned: usize,
+    soft_budget_exceeded: bool,
+}
+
+#[derive(Clone, Debug)]
+struct KnownKSearchResult {
+    kernel: KernelResult,
+    selected_beta: f64,
+    iterations: usize,
+}
+
+#[derive(Clone, Debug)]
+struct ResolvedPenalty {
+    penalty: Penalty,
+    beta: f64,
+    params_per_segment: usize,
+    params_source: &'static str,
+}
+
+fn checked_counter_increment(counter: &mut usize, name: &str) -> Result<(), CpdError> {
+    *counter = counter
+        .checked_add(1)
+        .ok_or_else(|| CpdError::resource_limit(format!("{name} counter overflow")))?;
+    Ok(())
+}
+
+fn resolve_penalty_params(
+    penalty: &Penalty,
+    configured_params_per_segment: usize,
+    model: &CostL2Mean,
+) -> (usize, &'static str) {
+    match penalty {
+        Penalty::BIC | Penalty::AIC => {
+            if configured_params_per_segment == DEFAULT_PARAMS_PER_SEGMENT {
+                (model.penalty_params_per_segment(), "model_default")
+            } else {
+                (configured_params_per_segment, "config_override")
+            }
+        }
+        Penalty::Manual(_) => (configured_params_per_segment, "config"),
+    }
+}
+
+fn resolve_penalty_beta(
+    model: &CostL2Mean,
+    penalty: &Penalty,
+    n: usize,
+    d: usize,
+    configured_params_per_segment: usize,
+) -> Result<ResolvedPenalty, CpdError> {
+    let (params_per_segment, params_source) =
+        resolve_penalty_params(penalty, configured_params_per_segment, model);
+    if params_per_segment == 0 {
+        return Err(CpdError::invalid_input(
+            "resolved params_per_segment must be >= 1; got 0",
+        ));
+    }
+    let beta = penalty_value(penalty, n, d, params_per_segment)?;
+    if !beta.is_finite() || beta <= 0.0 {
+        return Err(CpdError::invalid_input(format!(
+            "resolved penalty must be finite and > 0.0; got beta={beta}"
+        )));
+    }
+    Ok(ResolvedPenalty {
+        penalty: penalty.clone(),
+        beta,
+        params_per_segment,
+        params_source,
+    })
+}
+
+fn evaluate_segment_cost(
+    model: &CostL2Mean,
+    cache: &<CostL2Mean as CostModel>::Cache,
+    start: usize,
+    end: usize,
+    ctx: &ExecutionContext<'_>,
+    runtime: &mut RuntimeStats,
+) -> Result<f64, CpdError> {
+    checked_counter_increment(&mut runtime.cost_evals, "cost_evals")?;
+
+    match ctx.check_cost_eval_budget(runtime.cost_evals)? {
+        BudgetStatus::WithinBudget => {}
+        BudgetStatus::ExceededSoftDegrade => {
+            runtime.soft_budget_exceeded = true;
+        }
+    }
+
+    let segment_cost = model.segment_cost(cache, start, end);
+    if !segment_cost.is_finite() {
+        return Err(CpdError::numerical_issue(format!(
+            "non-finite segment cost at [{start}, {end}): {segment_cost}"
+        )));
+    }
+    Ok(segment_cost)
+}
+
+fn build_targets(validated: &ValidatedConstraints, n: usize) -> Vec<usize> {
+    let mut targets = validated.effective_candidates.clone();
+    if targets.last().copied() != Some(n) {
+        targets.push(n);
+    }
+    targets
+}
+
+fn reconstruct_breakpoints(n: usize, last_cp: &[usize]) -> Result<(Vec<usize>, usize), CpdError> {
+    let mut reverse = vec![n];
+    let mut cursor = n;
+    let mut hops = 0usize;
+
+    while cursor > 0 {
+        hops = hops
+            .checked_add(1)
+            .ok_or_else(|| CpdError::resource_limit("breakpoint backtrack hop overflow"))?;
+        if hops > n + 1 {
+            return Err(CpdError::invalid_input(
+                "invalid DP backtrack state: cycle detected",
+            ));
+        }
+
+        let tau = last_cp[cursor];
+        if tau == usize::MAX {
+            return Err(CpdError::invalid_input(format!(
+                "invalid DP backtrack state: missing predecessor at t={cursor}"
+            )));
+        }
+        if tau >= cursor {
+            return Err(CpdError::invalid_input(format!(
+                "invalid DP backtrack state: predecessor tau={tau} is not < t={cursor}"
+            )));
+        }
+        if tau == 0 {
+            break;
+        }
+        reverse.push(tau);
+        cursor = tau;
+    }
+
+    reverse.reverse();
+    let change_count = reverse.len().saturating_sub(1);
+    Ok((reverse, change_count))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_fpop_penalized(
+    model: &CostL2Mean,
+    cache: &<CostL2Mean as CostModel>::Cache,
+    x: &TimeSeriesView<'_>,
+    validated: &ValidatedConstraints,
+    beta: f64,
+    prune_candidates: bool,
+    cancel_check_every: usize,
+    ctx: &ExecutionContext<'_>,
+    started_at: Instant,
+    runtime: &mut RuntimeStats,
+) -> Result<KernelResult, CpdError> {
+    if !beta.is_finite() || beta <= 0.0 {
+        return Err(CpdError::invalid_input(format!(
+            "run_fpop_penalized requires finite beta > 0; got {beta}"
+        )));
+    }
+
+    let targets = build_targets(validated, x.n);
+    let total_targets = targets.len().max(1);
+    let min_segment_len = validated.min_segment_len;
+
+    let mut f = vec![f64::INFINITY; x.n + 1];
+    let mut last_cp = vec![usize::MAX; x.n + 1];
+    let mut changes = vec![usize::MAX; x.n + 1];
+
+    f[0] = -beta;
+    last_cp[0] = 0;
+    changes[0] = 0;
+
+    let mut candidate_set = vec![0usize];
+    let mut run_cost_evals = 0usize;
+    let mut run_considered = 0usize;
+    let mut run_pruned = 0usize;
+
+    for (target_idx, &t) in targets.iter().enumerate() {
+        if target_idx.is_multiple_of(cancel_check_every) {
+            ctx.check_cancelled_every(target_idx, 1)?;
+            match ctx.check_time_budget(started_at)? {
+                BudgetStatus::WithinBudget => {}
+                BudgetStatus::ExceededSoftDegrade => {
+                    runtime.soft_budget_exceeded = true;
+                }
+            }
+        }
+
+        let mut scored = vec![None; candidate_set.len()];
+        let mut best_cost = f64::INFINITY;
+        let mut best_tau = usize::MAX;
+        let mut best_changes = usize::MAX;
+
+        for (idx, &tau) in candidate_set.iter().enumerate() {
+            if t <= tau || t - tau < min_segment_len {
+                continue;
+            }
+            if !f[tau].is_finite() {
+                continue;
+            }
+
+            let proposed_changes = if tau == 0 {
+                changes[tau]
+            } else {
+                changes[tau].saturating_add(1)
+            };
+
+            if let Some(max_change_points) = validated.max_change_points
+                && proposed_changes > max_change_points
+            {
+                continue;
+            }
+
+            let segment_cost = evaluate_segment_cost(model, cache, tau, t, ctx, runtime)?;
+            checked_counter_increment(&mut run_cost_evals, "run_cost_evals")?;
+            checked_counter_increment(&mut runtime.candidates_considered, "candidates_considered")?;
+            checked_counter_increment(&mut run_considered, "run_candidates_considered")?;
+
+            let score_no_penalty = f[tau] + segment_cost;
+            if !score_no_penalty.is_finite() {
+                return Err(CpdError::numerical_issue(format!(
+                    "non-finite score without penalty at t={t}, tau={tau}: F(tau)={}, segment_cost={segment_cost}, score_no_penalty={score_no_penalty}",
+                    f[tau]
+                )));
+            }
+
+            let candidate = score_no_penalty + beta;
+            if !candidate.is_finite() {
+                return Err(CpdError::numerical_issue(format!(
+                    "non-finite objective at t={t}, tau={tau}: F(tau)={}, segment_cost={segment_cost}, beta={beta}, candidate={candidate}",
+                    f[tau]
+                )));
+            }
+
+            scored[idx] = Some(score_no_penalty);
+
+            if candidate < best_cost || (candidate == best_cost && tau < best_tau) {
+                best_cost = candidate;
+                best_tau = tau;
+                best_changes = proposed_changes;
+            }
+        }
+
+        if best_tau == usize::MAX {
+            return Err(CpdError::invalid_input(format!(
+                "no feasible segmentation under constraints at t={t}; check min_segment_len, candidate_splits/jump, and max_change_points"
+            )));
+        }
+
+        f[t] = best_cost;
+        last_cp[t] = best_tau;
+        changes[t] = best_changes;
+
+        let mut next_candidate_set = Vec::with_capacity(candidate_set.len() + 1);
+        if prune_candidates {
+            for (idx, &tau) in candidate_set.iter().enumerate() {
+                if let Some(score_no_penalty) = scored[idx] {
+                    if score_no_penalty < best_cost {
+                        next_candidate_set.push(tau);
+                    } else {
+                        checked_counter_increment(
+                            &mut runtime.candidates_pruned,
+                            "candidates_pruned",
+                        )?;
+                        checked_counter_increment(&mut run_pruned, "run_candidates_pruned")?;
+                    }
+                } else {
+                    next_candidate_set.push(tau);
+                }
+            }
+        } else {
+            next_candidate_set.extend_from_slice(&candidate_set);
+        }
+
+        if t < x.n {
+            next_candidate_set.push(t);
+        }
+        candidate_set = next_candidate_set;
+
+        ctx.report_progress((target_idx + 1) as f32 / total_targets as f32);
+    }
+
+    if !f[x.n].is_finite() {
+        return Err(CpdError::invalid_input(
+            "no feasible segmentation reached terminal index n",
+        ));
+    }
+
+    let (breakpoints, change_count) = reconstruct_breakpoints(x.n, &last_cp)?;
+    Ok(KernelResult {
+        breakpoints,
+        change_count,
+        objective: f[x.n],
+        cost_evals: run_cost_evals,
+        candidates_considered: run_considered,
+        candidates_pruned: run_pruned,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_fpop_penalty_path(
+    model: &CostL2Mean,
+    cache: &<CostL2Mean as CostModel>::Cache,
+    x: &TimeSeriesView<'_>,
+    validated: &ValidatedConstraints,
+    betas: &[f64],
+    prune_candidates: bool,
+    cancel_check_every: usize,
+    ctx: &ExecutionContext<'_>,
+    started_at: Instant,
+    runtime: &mut RuntimeStats,
+) -> Result<Vec<KernelResult>, CpdError> {
+    if betas.is_empty() {
+        return Err(CpdError::invalid_input(
+            "run_fpop_penalty_path requires at least one beta",
+        ));
+    }
+    for (idx, &beta) in betas.iter().enumerate() {
+        if !beta.is_finite() || beta <= 0.0 {
+            return Err(CpdError::invalid_input(format!(
+                "run_fpop_penalty_path beta[{idx}] must be finite and > 0; got {beta}"
+            )));
+        }
+    }
+
+    let targets = build_targets(validated, x.n);
+    let total_targets = targets.len().max(1);
+    let min_segment_len = validated.min_segment_len;
+
+    #[derive(Clone, Debug)]
+    struct PathState {
+        f: Vec<f64>,
+        last_cp: Vec<usize>,
+        changes: Vec<usize>,
+        candidate_set: Vec<usize>,
+        run_candidates_scored: usize,
+        run_considered: usize,
+        run_pruned: usize,
+    }
+
+    let mut states = Vec::with_capacity(betas.len());
+    for &beta in betas {
+        let mut f = vec![f64::INFINITY; x.n + 1];
+        let mut last_cp = vec![usize::MAX; x.n + 1];
+        let mut changes = vec![usize::MAX; x.n + 1];
+        f[0] = -beta;
+        last_cp[0] = 0;
+        changes[0] = 0;
+        states.push(PathState {
+            f,
+            last_cp,
+            changes,
+            candidate_set: vec![0usize],
+            run_candidates_scored: 0,
+            run_considered: 0,
+            run_pruned: 0,
+        });
+    }
+
+    let mut runtime_control_iteration = 0usize;
+    for (target_idx, &t) in targets.iter().enumerate() {
+        let mut segment_cost_cache: HashMap<usize, f64> = HashMap::new();
+
+        for (path_idx, state) in states.iter_mut().enumerate() {
+            checked_counter_increment(&mut runtime_control_iteration, "runtime_control_iteration")?;
+            if runtime_control_iteration.is_multiple_of(cancel_check_every) {
+                ctx.check_cancelled_every(runtime_control_iteration, 1)?;
+                match ctx.check_time_budget(started_at)? {
+                    BudgetStatus::WithinBudget => {}
+                    BudgetStatus::ExceededSoftDegrade => {
+                        runtime.soft_budget_exceeded = true;
+                    }
+                }
+            }
+
+            let beta = betas[path_idx];
+            let mut scored = vec![None; state.candidate_set.len()];
+            let mut best_cost = f64::INFINITY;
+            let mut best_tau = usize::MAX;
+            let mut best_changes = usize::MAX;
+
+            for (idx, &tau) in state.candidate_set.iter().enumerate() {
+                if t <= tau || t - tau < min_segment_len {
+                    continue;
+                }
+                if !state.f[tau].is_finite() {
+                    continue;
+                }
+
+                let proposed_changes = if tau == 0 {
+                    state.changes[tau]
+                } else {
+                    state.changes[tau].saturating_add(1)
+                };
+
+                if let Some(max_change_points) = validated.max_change_points
+                    && proposed_changes > max_change_points
+                {
+                    continue;
+                }
+
+                let segment_cost = if let Some(cost) = segment_cost_cache.get(&tau) {
+                    *cost
+                } else {
+                    let cost = evaluate_segment_cost(model, cache, tau, t, ctx, runtime)?;
+                    segment_cost_cache.insert(tau, cost);
+                    cost
+                };
+
+                checked_counter_increment(
+                    &mut state.run_candidates_scored,
+                    "run_candidates_scored",
+                )?;
+                checked_counter_increment(
+                    &mut runtime.candidates_considered,
+                    "candidates_considered",
+                )?;
+                checked_counter_increment(&mut state.run_considered, "run_candidates_considered")?;
+
+                let score_no_penalty = state.f[tau] + segment_cost;
+                if !score_no_penalty.is_finite() {
+                    return Err(CpdError::numerical_issue(format!(
+                        "non-finite score without penalty at t={t}, tau={tau}, path_idx={path_idx}: F(tau)={}, segment_cost={segment_cost}, score_no_penalty={score_no_penalty}",
+                        state.f[tau]
+                    )));
+                }
+
+                let candidate = score_no_penalty + beta;
+                if !candidate.is_finite() {
+                    return Err(CpdError::numerical_issue(format!(
+                        "non-finite objective at t={t}, tau={tau}, path_idx={path_idx}: F(tau)={}, segment_cost={segment_cost}, beta={beta}, candidate={candidate}",
+                        state.f[tau]
+                    )));
+                }
+
+                scored[idx] = Some(score_no_penalty);
+
+                if candidate < best_cost || (candidate == best_cost && tau < best_tau) {
+                    best_cost = candidate;
+                    best_tau = tau;
+                    best_changes = proposed_changes;
+                }
+            }
+
+            if best_tau == usize::MAX {
+                return Err(CpdError::invalid_input(format!(
+                    "no feasible segmentation under constraints at t={t} for penalty_path[{path_idx}] (beta={beta}); check min_segment_len, candidate_splits/jump, and max_change_points"
+                )));
+            }
+
+            state.f[t] = best_cost;
+            state.last_cp[t] = best_tau;
+            state.changes[t] = best_changes;
+
+            let mut next_candidate_set = Vec::with_capacity(state.candidate_set.len() + 1);
+            if prune_candidates {
+                for (idx, &tau) in state.candidate_set.iter().enumerate() {
+                    if let Some(score_no_penalty) = scored[idx] {
+                        if score_no_penalty < best_cost {
+                            next_candidate_set.push(tau);
+                        } else {
+                            checked_counter_increment(
+                                &mut runtime.candidates_pruned,
+                                "candidates_pruned",
+                            )?;
+                            checked_counter_increment(
+                                &mut state.run_pruned,
+                                "run_candidates_pruned",
+                            )?;
+                        }
+                    } else {
+                        next_candidate_set.push(tau);
+                    }
+                }
+            } else {
+                next_candidate_set.extend_from_slice(&state.candidate_set);
+            }
+
+            if t < x.n {
+                next_candidate_set.push(t);
+            }
+            state.candidate_set = next_candidate_set;
+        }
+
+        ctx.report_progress((target_idx + 1) as f32 / total_targets as f32);
+    }
+
+    let mut out = Vec::with_capacity(states.len());
+    for (path_idx, state) in states.iter().enumerate() {
+        if !state.f[x.n].is_finite() {
+            return Err(CpdError::invalid_input(format!(
+                "no feasible segmentation reached terminal index n for penalty_path[{path_idx}]"
+            )));
+        }
+        let (breakpoints, change_count) = reconstruct_breakpoints(x.n, &state.last_cp)?;
+        out.push(KernelResult {
+            breakpoints,
+            change_count,
+            objective: state.f[x.n],
+            cost_evals: state.run_candidates_scored,
+            candidates_considered: state.run_considered,
+            candidates_pruned: state.run_pruned,
+        });
+    }
+
+    Ok(out)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_known_k_search(
+    model: &CostL2Mean,
+    cache: &<CostL2Mean as CostModel>::Cache,
+    x: &TimeSeriesView<'_>,
+    validated: &ValidatedConstraints,
+    k: usize,
+    cancel_check_every: usize,
+    ctx: &ExecutionContext<'_>,
+    started_at: Instant,
+    runtime: &mut RuntimeStats,
+) -> Result<KnownKSearchResult, CpdError> {
+    if let Some(max_change_points) = validated.max_change_points
+        && max_change_points < k
+    {
+        return Err(CpdError::invalid_input(format!(
+            "KnownK={k} exceeds constraints.max_change_points={max_change_points}"
+        )));
+    }
+
+    let mut search_constraints = validated.clone();
+    search_constraints.max_change_points = None;
+
+    let mut iterations = 0usize;
+    let mut low_beta = f64::EPSILON;
+    let low_kernel = run_fpop_penalized(
+        model,
+        cache,
+        x,
+        &search_constraints,
+        low_beta,
+        false,
+        cancel_check_every,
+        ctx,
+        started_at,
+        runtime,
+    )?;
+    checked_counter_increment(&mut iterations, "known_k_iterations")?;
+
+    if low_kernel.change_count == k {
+        return Ok(KnownKSearchResult {
+            kernel: low_kernel,
+            selected_beta: low_beta,
+            iterations,
+        });
+    }
+
+    if low_kernel.change_count < k {
+        return Err(CpdError::invalid_input(format!(
+            "KnownK exact solution unreachable: requested k={k}, but smallest tested penalty beta={low_beta} produced only {} changes",
+            low_kernel.change_count
+        )));
+    }
+
+    let mut high_beta = low_beta;
+    let mut high_kernel = low_kernel.clone();
+    let mut low_kernel = low_kernel;
+
+    for _ in 0..KNOWN_K_MAX_DOUBLINGS {
+        if high_kernel.change_count <= k {
+            break;
+        }
+        high_beta *= 2.0;
+        if !high_beta.is_finite() {
+            return Err(CpdError::invalid_input(format!(
+                "KnownK exact solution unreachable: penalty bracketing overflowed while searching for k={k}"
+            )));
+        }
+        high_kernel = run_fpop_penalized(
+            model,
+            cache,
+            x,
+            &search_constraints,
+            high_beta,
+            false,
+            cancel_check_every,
+            ctx,
+            started_at,
+            runtime,
+        )?;
+        checked_counter_increment(&mut iterations, "known_k_iterations")?;
+
+        if high_kernel.change_count == k {
+            return Ok(KnownKSearchResult {
+                kernel: high_kernel,
+                selected_beta: high_beta,
+                iterations,
+            });
+        }
+    }
+
+    if high_kernel.change_count > k {
+        return Err(CpdError::invalid_input(format!(
+            "KnownK exact solution unreachable: failed to bracket requested k={k} within {KNOWN_K_MAX_DOUBLINGS} penalty doublings"
+        )));
+    }
+
+    for _ in 0..KNOWN_K_MAX_BISECTION_ITERS {
+        let mid_beta = low_beta + (high_beta - low_beta) * 0.5;
+        if !(mid_beta > low_beta && mid_beta < high_beta) {
+            break;
+        }
+
+        let mid_kernel = run_fpop_penalized(
+            model,
+            cache,
+            x,
+            &search_constraints,
+            mid_beta,
+            false,
+            cancel_check_every,
+            ctx,
+            started_at,
+            runtime,
+        )?;
+        checked_counter_increment(&mut iterations, "known_k_iterations")?;
+
+        if mid_kernel.change_count == k {
+            return Ok(KnownKSearchResult {
+                kernel: mid_kernel,
+                selected_beta: mid_beta,
+                iterations,
+            });
+        }
+
+        if mid_kernel.change_count > k {
+            low_beta = mid_beta;
+            low_kernel = mid_kernel;
+        } else {
+            high_beta = mid_beta;
+            high_kernel = mid_kernel;
+        }
+    }
+
+    Err(CpdError::invalid_input(format!(
+        "KnownK exact solution unreachable: requested k={k}, bracketed counts were low_beta={low_beta} -> {} changes and high_beta={high_beta} -> {} changes",
+        low_kernel.change_count, high_kernel.change_count
+    )))
+}
+
+impl OfflineDetector for Fpop {
     fn detect(
         &self,
         x: &TimeSeriesView<'_>,
@@ -79,50 +751,172 @@ impl<C: CostModel + Clone> OfflineDetector for Fpop<C> {
     ) -> Result<OfflineChangePointResult, CpdError> {
         self.config.validate()?;
 
-        if self.cost_model.name() != "l2_mean" {
-            return Err(CpdError::not_supported(format!(
-                "FPOP currently supports only CostL2Mean; got cost_model='{}'",
-                self.cost_model.name()
-            )));
+        let validated = validate_constraints(ctx.constraints, x.n)?;
+
+        self.cost_model.validate(x)?;
+        check_missing_compatibility(x.missing, self.cost_model.missing_support())?;
+        let cache = self.cost_model.precompute(x, &validated.cache_policy)?;
+
+        let started_at = Instant::now();
+        let cancel_check_every = self.config.normalized_cancel_check_every();
+        let mut runtime = RuntimeStats::default();
+        let mut notes = vec!["kernel=exact_optimal_partitioning_l2".to_string()];
+        let mut warnings = vec![];
+        let mut run_cost_note_label = "run_cost_evals";
+
+        if let Some(max_depth) = validated.max_depth {
+            warnings.push(format!(
+                "constraints.max_depth={max_depth} is ignored by FPOP"
+            ));
         }
 
-        let pelt = Pelt::new(
-            self.cost_model.clone(),
-            PeltConfig {
-                stopping: self.config.stopping.clone(),
-                params_per_segment: self.config.params_per_segment,
-                cancel_check_every: self.config.cancel_check_every,
-            },
-        )?;
+        let kernel = match &self.config.stopping {
+            Stopping::Penalized(penalty) => {
+                let resolved = resolve_penalty_beta(
+                    &self.cost_model,
+                    penalty,
+                    x.n,
+                    x.d,
+                    self.config.params_per_segment,
+                )?;
+                notes.push(format!(
+                    "stopping=Penalized({penalty:?}), beta={}, params_per_segment={} ({})",
+                    resolved.beta, resolved.params_per_segment, resolved.params_source
+                ));
+                run_fpop_penalized(
+                    &self.cost_model,
+                    &cache,
+                    x,
+                    &validated,
+                    resolved.beta,
+                    true,
+                    cancel_check_every,
+                    ctx,
+                    started_at,
+                    &mut runtime,
+                )?
+            }
+            Stopping::KnownK(k) => {
+                let known_k = run_known_k_search(
+                    &self.cost_model,
+                    &cache,
+                    x,
+                    &validated,
+                    *k,
+                    cancel_check_every,
+                    ctx,
+                    started_at,
+                    &mut runtime,
+                )?;
+                notes.push(format!(
+                    "stopping=KnownK({k}), selected_beta={}, search_iterations={}",
+                    known_k.selected_beta, known_k.iterations
+                ));
+                known_k.kernel
+            }
+            Stopping::PenaltyPath(path) => {
+                let mut resolved_path = Vec::with_capacity(path.len());
+                let mut betas = Vec::with_capacity(path.len());
+                for penalty in path {
+                    let resolved = resolve_penalty_beta(
+                        &self.cost_model,
+                        penalty,
+                        x.n,
+                        x.d,
+                        self.config.params_per_segment,
+                    )?;
+                    betas.push(resolved.beta);
+                    resolved_path.push(resolved);
+                }
 
-        let mut result = pelt.detect(x, ctx)?;
-        result.diagnostics.algorithm = Cow::Borrowed("fpop");
-        result.diagnostics.warnings = result
-            .diagnostics
-            .warnings
-            .into_iter()
-            .map(|warning| warning.replace("PELT", "FPOP"))
-            .collect();
-        result
-            .diagnostics
-            .notes
-            .push("kernel=exact_optimal_partitioning (L2)".to_string());
+                notes.push(format!(
+                    "stopping=PenaltyPath(len={}), primary_index=0",
+                    resolved_path.len()
+                ));
 
-        if let Some(runtime_ms) = result.diagnostics.runtime_ms {
-            ctx.record_scalar("offline.fpop.runtime_ms", runtime_ms as f64);
-        }
-        if let Some(pruning_stats) = &result.diagnostics.pruning_stats {
-            ctx.record_scalar(
-                "offline.fpop.candidates_considered",
-                pruning_stats.candidates_considered as f64,
+                let kernels = run_fpop_penalty_path(
+                    &self.cost_model,
+                    &cache,
+                    x,
+                    &validated,
+                    betas.as_slice(),
+                    true,
+                    cancel_check_every,
+                    ctx,
+                    started_at,
+                    &mut runtime,
+                )?;
+
+                for (idx, (resolved, kernel)) in
+                    resolved_path.iter().zip(kernels.iter()).enumerate()
+                {
+                    notes.push(format!(
+                        "penalty_path[{idx}]: penalty={:?}, beta={}, params_per_segment={} ({}), change_count={}, objective={}",
+                        resolved.penalty,
+                        resolved.beta,
+                        resolved.params_per_segment,
+                        resolved.params_source,
+                        kernel.change_count,
+                        kernel.objective
+                    ));
+                }
+
+                run_cost_note_label = "run_candidates_scored";
+                kernels
+                    .into_iter()
+                    .next()
+                    .expect("PenaltyPath validated to be non-empty")
+            }
+        };
+
+        if runtime.soft_budget_exceeded {
+            warnings.push(
+                "budget exceeded under SoftDegrade mode; run continued without algorithm fallback"
+                    .to_string(),
             );
-            ctx.record_scalar(
-                "offline.fpop.candidates_pruned",
-                pruning_stats.candidates_pruned as f64,
-            );
         }
 
-        Ok(result)
+        let runtime_ms = u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
+
+        ctx.record_scalar("offline.fpop.cost_evals", runtime.cost_evals as f64);
+        ctx.record_scalar(
+            "offline.fpop.candidates_considered",
+            runtime.candidates_considered as f64,
+        );
+        ctx.record_scalar(
+            "offline.fpop.candidates_pruned",
+            runtime.candidates_pruned as f64,
+        );
+        ctx.record_scalar("offline.fpop.runtime_ms", runtime_ms as f64);
+        ctx.report_progress(1.0);
+
+        notes.push(format!(
+            "final_objective={}, change_count={}",
+            kernel.objective, kernel.change_count
+        ));
+        notes.push(format!("{run_cost_note_label}={}", kernel.cost_evals));
+        notes.push(format!(
+            "run_candidates_considered={}, run_candidates_pruned={}",
+            kernel.candidates_considered, kernel.candidates_pruned
+        ));
+
+        let diagnostics = Diagnostics {
+            n: x.n,
+            d: x.d,
+            runtime_ms: Some(runtime_ms),
+            notes,
+            warnings,
+            algorithm: Cow::Borrowed("fpop"),
+            cost_model: Cow::Borrowed(self.cost_model.name()),
+            repro_mode: ctx.repro_mode,
+            pruning_stats: Some(PruningStats {
+                candidates_considered: runtime.candidates_considered,
+                candidates_pruned: runtime.candidates_pruned,
+            }),
+            ..Diagnostics::default()
+        };
+
+        OfflineChangePointResult::new(x.n, kernel.breakpoints, diagnostics)
     }
 }
 
@@ -134,7 +928,7 @@ mod tests {
         Constraints, DTypeView, ExecutionContext, MemoryLayout, MissingPolicy, OfflineDetector,
         Penalty, Stopping, TimeIndex, TimeSeriesView,
     };
-    use cpd_costs::{CostL2Mean, CostNormalMeanVar};
+    use cpd_costs::CostL2Mean;
 
     fn make_f64_view<'a>(
         values: &'a [f64],
@@ -169,8 +963,8 @@ mod tests {
         assert_eq!(default_cfg.params_per_segment, 2);
         assert_eq!(default_cfg.cancel_check_every, 1000);
 
-        let ok =
-            Fpop::new(CostL2Mean::default(), default_cfg.clone()).expect("default should validate");
+        let ok = Fpop::new(CostL2Mean::default(), default_cfg.clone())
+            .expect("default config should validate");
         assert_eq!(ok.config(), &default_cfg);
 
         let err = Fpop::new(
@@ -186,13 +980,13 @@ mod tests {
     }
 
     #[test]
-    fn rejects_non_l2_cost_models() {
+    fn cancel_check_every_zero_is_normalized() {
         let detector = Fpop::new(
-            CostNormalMeanVar::default(),
+            CostL2Mean::default(),
             FpopConfig {
                 stopping: Stopping::Penalized(Penalty::Manual(1.0)),
-                params_per_segment: 3,
-                cancel_check_every: 1000,
+                params_per_segment: 2,
+                cancel_check_every: 0,
             },
         )
         .expect("config should be valid");
@@ -207,10 +1001,8 @@ mod tests {
         );
         let constraints = constraints_with_min_segment_len(1);
         let ctx = ExecutionContext::new(&constraints);
-        let err = detector
-            .detect(&view, &ctx)
-            .expect_err("non-L2 model must be rejected");
-        assert!(matches!(err, cpd_core::CpdError::NotSupported(_)));
+        let result = detector.detect(&view, &ctx).expect("detect should succeed");
+        assert_eq!(result.breakpoints.last().copied(), Some(values.len()));
     }
 
     #[test]
