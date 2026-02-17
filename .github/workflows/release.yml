@@ -57,6 +57,10 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Install macOS Rust targets for universal2
+        if: runner.os == 'macOS'
+        run: rustup target add x86_64-apple-darwin aarch64-apple-darwin
+
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
         with:
