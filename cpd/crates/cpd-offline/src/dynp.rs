@@ -4,8 +4,8 @@
 
 use cpd_core::{
     BudgetStatus, CpdError, Diagnostics, ExecutionContext, OfflineChangePointResult,
-    OfflineDetector, Stopping, TimeSeriesView, ValidatedConstraints, check_missing_compatibility,
-    validate_constraints, validate_stopping,
+    OfflineDetector, Penalty, Stopping, TimeSeriesView, ValidatedConstraints,
+    check_missing_compatibility, penalty_value, validate_constraints, validate_stopping,
 };
 use cpd_costs::CostModel;
 use std::borrow::Cow;
@@ -33,16 +33,6 @@ impl Default for DynpConfig {
 impl DynpConfig {
     fn validate(&self) -> Result<(), CpdError> {
         validate_stopping(&self.stopping)?;
-        match &self.stopping {
-            Stopping::KnownK(_) => Ok(()),
-            Stopping::Penalized(penalty) => Err(CpdError::not_supported(format!(
-                "DynpConfig.stopping must be KnownK; got Penalized({penalty:?})"
-            ))),
-            Stopping::PenaltyPath(path) => Err(CpdError::not_supported(format!(
-                "DynpConfig.stopping must be KnownK; got PenaltyPath of length {}",
-                path.len()
-            ))),
-        }?;
         Ok(())
     }
 
@@ -85,6 +75,53 @@ struct DynpKernelResult {
     breakpoints: Vec<usize>,
     objective: f64,
     change_count: usize,
+}
+
+#[derive(Clone, Debug)]
+struct DynpSweepResult {
+    endpoints: Vec<usize>,
+    backpointers: Vec<Vec<usize>>,
+    objective_by_segment_count: Vec<f64>,
+}
+
+#[derive(Clone, Debug)]
+struct ResolvedPenalty {
+    penalty: Penalty,
+    beta: f64,
+    params_per_segment: usize,
+}
+
+#[derive(Clone, Debug)]
+struct PenalizedSelection {
+    kernel: DynpKernelResult,
+    penalized_objective: f64,
+}
+
+fn resolve_penalty_beta<C: CostModel>(
+    model: &C,
+    penalty: &Penalty,
+    n: usize,
+    d: usize,
+) -> Result<ResolvedPenalty, CpdError> {
+    let params_per_segment = model.penalty_params_per_segment();
+    if params_per_segment == 0 {
+        return Err(CpdError::invalid_input(
+            "resolved params_per_segment must be >= 1; got 0",
+        ));
+    }
+
+    let beta = penalty_value(penalty, n, d, params_per_segment)?;
+    if !beta.is_finite() || beta <= 0.0 {
+        return Err(CpdError::invalid_input(format!(
+            "resolved penalty must be finite and > 0.0; got beta={beta}"
+        )));
+    }
+
+    Ok(ResolvedPenalty {
+        penalty: penalty.clone(),
+        beta,
+        params_per_segment,
+    })
 }
 
 fn checked_counter_increment(counter: &mut usize, name: &str) -> Result<(), CpdError> {
@@ -150,39 +187,32 @@ fn build_endpoints(validated: &ValidatedConstraints, n: usize) -> Vec<usize> {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn run_dynp_known_k<C: CostModel>(
+fn run_dynp_sweep<C: CostModel>(
     model: &C,
     cache: &C::Cache,
     x: &TimeSeriesView<'_>,
     validated: &ValidatedConstraints,
-    k: usize,
+    max_k: usize,
     cancel_check_every: usize,
     ctx: &ExecutionContext<'_>,
     started_at: Instant,
     runtime: &mut RuntimeStats,
-) -> Result<DynpKernelResult, CpdError> {
-    if let Some(max_change_points) = validated.max_change_points
-        && max_change_points < k
-    {
-        return Err(CpdError::invalid_input(format!(
-            "KnownK={k} exceeds constraints.max_change_points={max_change_points}"
-        )));
-    }
-
+) -> Result<DynpSweepResult, CpdError> {
     let candidate_count = validated.effective_candidates.len();
-    if candidate_count < k {
+    if max_k > candidate_count {
         return Err(CpdError::invalid_input(format!(
-            "KnownK exact solution unreachable: requested k={k}, but only {candidate_count} candidate split positions are available under constraints"
+            "max_k={max_k} exceeds available candidate split positions={candidate_count}"
         )));
     }
 
-    let segments = k
+    let segments = max_k
         .checked_add(1)
         .ok_or_else(|| CpdError::resource_limit("segments overflow"))?;
     let endpoints = build_endpoints(validated, x.n);
     let target_idx = endpoints.len().saturating_sub(1);
     let inf = f64::INFINITY;
     let mut backpointers = vec![vec![usize::MAX; endpoints.len()]; segments + 1];
+    let mut objective_by_segment_count = vec![inf; segments + 1];
     let mut dp_prev = vec![inf; endpoints.len()];
     dp_prev[0] = 0.0;
     let mut iteration = 0usize;
@@ -243,31 +273,54 @@ fn run_dynp_known_k<C: CostModel>(
             }
         }
 
+        objective_by_segment_count[segment_count] = dp_curr[target_idx];
         dp_prev = dp_curr;
         ctx.report_progress(segment_count as f32 / segments as f32);
     }
 
-    let objective = dp_prev[target_idx];
-    if !objective.is_finite() {
+    Ok(DynpSweepResult {
+        endpoints,
+        backpointers,
+        objective_by_segment_count,
+    })
+}
+
+fn reconstruct_breakpoints_for_segment_count(
+    sweep: &DynpSweepResult,
+    segment_count: usize,
+    n: usize,
+) -> Result<Vec<usize>, CpdError> {
+    if segment_count == 0 || segment_count >= sweep.backpointers.len() {
         return Err(CpdError::invalid_input(format!(
-            "KnownK exact solution unreachable: requested k={k} under current constraints"
+            "invalid segment_count={segment_count} for backtracking"
         )));
     }
 
-    let mut split_points_reversed = Vec::with_capacity(k);
+    if sweep.endpoints.last().copied() != Some(n) {
+        return Err(CpdError::invalid_input(format!(
+            "invalid dynp endpoint state: expected terminal endpoint n={n}"
+        )));
+    }
+
+    if segment_count == 1 {
+        return Ok(vec![n]);
+    }
+
+    let target_idx = sweep.endpoints.len().saturating_sub(1);
+    let mut split_points_reversed = Vec::with_capacity(segment_count - 1);
     let mut cursor = target_idx;
-    for segment_count in (2..=segments).rev() {
-        let prev_idx = backpointers[segment_count][cursor];
+    for current_segment_count in (2..=segment_count).rev() {
+        let prev_idx = sweep.backpointers[current_segment_count][cursor];
         if prev_idx == usize::MAX {
             return Err(CpdError::invalid_input(format!(
-                "KnownK exact solution unreachable: backtracking failed at segment_count={segment_count}, endpoint={}",
-                endpoints[cursor]
+                "backtracking failed at segment_count={current_segment_count}, endpoint={}",
+                sweep.endpoints[cursor]
             )));
         }
-        let split = endpoints[prev_idx];
-        if split == 0 || split >= x.n {
+        let split = sweep.endpoints[prev_idx];
+        if split == 0 || split >= n {
             return Err(CpdError::invalid_input(format!(
-                "KnownK exact solution unreachable: invalid split during backtracking at split={split}"
+                "invalid split during backtracking at split={split}"
             )));
         }
         split_points_reversed.push(split);
@@ -276,13 +329,215 @@ fn run_dynp_known_k<C: CostModel>(
     split_points_reversed.reverse();
 
     let mut breakpoints = split_points_reversed;
-    breakpoints.push(x.n);
+    breakpoints.push(n);
+
+    Ok(breakpoints)
+}
+
+fn max_change_points_to_search(validated: &ValidatedConstraints) -> usize {
+    let candidate_count = validated.effective_candidates.len();
+    match validated.max_change_points {
+        Some(max_change_points) => max_change_points.min(candidate_count),
+        None => candidate_count,
+    }
+}
+
+fn select_penalized_kernel(
+    sweep: &DynpSweepResult,
+    x: &TimeSeriesView<'_>,
+    beta: f64,
+    context: &str,
+) -> Result<PenalizedSelection, CpdError> {
+    if !beta.is_finite() || beta <= 0.0 {
+        return Err(CpdError::invalid_input(format!(
+            "{context} requires finite beta > 0.0; got {beta}"
+        )));
+    }
+
+    let mut best_k = usize::MAX;
+    let mut best_objective = f64::INFINITY;
+    let mut best_penalized_objective = f64::INFINITY;
+
+    for segment_count in 1..sweep.objective_by_segment_count.len() {
+        let objective = sweep.objective_by_segment_count[segment_count];
+        if !objective.is_finite() {
+            continue;
+        }
+
+        let k = segment_count - 1;
+        let penalized_objective = objective + beta * (k as f64);
+        if !penalized_objective.is_finite() {
+            return Err(CpdError::numerical_issue(format!(
+                "{context} produced non-finite objective for k={k}: objective={objective}, beta={beta}"
+            )));
+        }
+
+        let is_better = penalized_objective < best_penalized_objective
+            || (penalized_objective == best_penalized_objective && k < best_k);
+        if is_better {
+            best_k = k;
+            best_objective = objective;
+            best_penalized_objective = penalized_objective;
+        }
+    }
+
+    if best_k == usize::MAX {
+        return Err(CpdError::invalid_input(format!(
+            "{context} found no feasible segmentation under current constraints"
+        )));
+    }
+
+    let segment_count = best_k
+        .checked_add(1)
+        .ok_or_else(|| CpdError::resource_limit("segment_count overflow"))?;
+    let breakpoints = reconstruct_breakpoints_for_segment_count(sweep, segment_count, x.n)
+        .map_err(|err| CpdError::invalid_input(format!("{context} backtracking failed: {err}")))?;
+
+    Ok(PenalizedSelection {
+        kernel: DynpKernelResult {
+            breakpoints,
+            objective: best_objective,
+            change_count: best_k,
+        },
+        penalized_objective: best_penalized_objective,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_dynp_known_k<C: CostModel>(
+    model: &C,
+    cache: &C::Cache,
+    x: &TimeSeriesView<'_>,
+    validated: &ValidatedConstraints,
+    k: usize,
+    cancel_check_every: usize,
+    ctx: &ExecutionContext<'_>,
+    started_at: Instant,
+    runtime: &mut RuntimeStats,
+) -> Result<DynpKernelResult, CpdError> {
+    if let Some(max_change_points) = validated.max_change_points
+        && max_change_points < k
+    {
+        return Err(CpdError::invalid_input(format!(
+            "KnownK={k} exceeds constraints.max_change_points={max_change_points}"
+        )));
+    }
+
+    let candidate_count = validated.effective_candidates.len();
+    if candidate_count < k {
+        return Err(CpdError::invalid_input(format!(
+            "KnownK exact solution unreachable: requested k={k}, but only {candidate_count} candidate split positions are available under constraints"
+        )));
+    }
+
+    let sweep = run_dynp_sweep(
+        model,
+        cache,
+        x,
+        validated,
+        k,
+        cancel_check_every,
+        ctx,
+        started_at,
+        runtime,
+    )?;
+
+    let segment_count = k
+        .checked_add(1)
+        .ok_or_else(|| CpdError::resource_limit("segment_count overflow"))?;
+    let objective = sweep.objective_by_segment_count[segment_count];
+    if !objective.is_finite() {
+        return Err(CpdError::invalid_input(format!(
+            "KnownK exact solution unreachable: requested k={k} under current constraints"
+        )));
+    }
+
+    let breakpoints = reconstruct_breakpoints_for_segment_count(&sweep, segment_count, x.n)
+        .map_err(|err| {
+            CpdError::invalid_input(format!("KnownK exact solution unreachable: {err}"))
+        })?;
 
     Ok(DynpKernelResult {
         objective,
         change_count: k,
         breakpoints,
     })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_dynp_penalized<C: CostModel>(
+    model: &C,
+    cache: &C::Cache,
+    x: &TimeSeriesView<'_>,
+    validated: &ValidatedConstraints,
+    beta: f64,
+    cancel_check_every: usize,
+    ctx: &ExecutionContext<'_>,
+    started_at: Instant,
+    runtime: &mut RuntimeStats,
+) -> Result<PenalizedSelection, CpdError> {
+    let max_k = max_change_points_to_search(validated);
+    let sweep = run_dynp_sweep(
+        model,
+        cache,
+        x,
+        validated,
+        max_k,
+        cancel_check_every,
+        ctx,
+        started_at,
+        runtime,
+    )?;
+    select_penalized_kernel(&sweep, x, beta, "Penalized selection")
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_dynp_penalty_path<C: CostModel>(
+    model: &C,
+    cache: &C::Cache,
+    x: &TimeSeriesView<'_>,
+    validated: &ValidatedConstraints,
+    betas: &[f64],
+    cancel_check_every: usize,
+    ctx: &ExecutionContext<'_>,
+    started_at: Instant,
+    runtime: &mut RuntimeStats,
+) -> Result<Vec<PenalizedSelection>, CpdError> {
+    if betas.is_empty() {
+        return Err(CpdError::invalid_input(
+            "run_dynp_penalty_path requires at least one beta",
+        ));
+    }
+
+    for (idx, &beta) in betas.iter().enumerate() {
+        if !beta.is_finite() || beta <= 0.0 {
+            return Err(CpdError::invalid_input(format!(
+                "run_dynp_penalty_path beta[{idx}] must be finite and > 0; got {beta}"
+            )));
+        }
+    }
+
+    let max_k = max_change_points_to_search(validated);
+    let sweep = run_dynp_sweep(
+        model,
+        cache,
+        x,
+        validated,
+        max_k,
+        cancel_check_every,
+        ctx,
+        started_at,
+        runtime,
+    )?;
+
+    let mut out = Vec::with_capacity(betas.len());
+    for (idx, &beta) in betas.iter().enumerate() {
+        let context = format!("PenaltyPath[{idx}]");
+        let selection = select_penalized_kernel(&sweep, x, beta, context.as_str())?;
+        out.push(selection);
+    }
+
+    Ok(out)
 }
 
 impl<C: CostModel> OfflineDetector for Dynp<C> {
@@ -327,15 +582,73 @@ impl<C: CostModel> OfflineDetector for Dynp<C> {
                 )?
             }
             Stopping::Penalized(penalty) => {
-                return Err(CpdError::not_supported(format!(
-                    "Dynp currently supports only KnownK stopping; got Penalized({penalty:?})"
-                )));
+                let resolved = resolve_penalty_beta(&self.cost_model, penalty, x.n, x.d)?;
+                notes.push(format!(
+                    "stopping=Penalized({penalty:?}), beta={}, params_per_segment={} (model_default)",
+                    resolved.beta, resolved.params_per_segment
+                ));
+                let selection = run_dynp_penalized(
+                    &self.cost_model,
+                    &cache,
+                    x,
+                    &validated,
+                    resolved.beta,
+                    cancel_check_every,
+                    ctx,
+                    started_at,
+                    &mut runtime,
+                )?;
+                notes.push(format!(
+                    "selected_penalized_objective={}",
+                    selection.penalized_objective
+                ));
+                selection.kernel
             }
             Stopping::PenaltyPath(path) => {
-                return Err(CpdError::not_supported(format!(
-                    "Dynp currently supports only KnownK stopping; got PenaltyPath of length {}",
-                    path.len()
-                )));
+                let mut resolved_path = Vec::with_capacity(path.len());
+                let mut betas = Vec::with_capacity(path.len());
+                for penalty in path {
+                    let resolved = resolve_penalty_beta(&self.cost_model, penalty, x.n, x.d)?;
+                    betas.push(resolved.beta);
+                    resolved_path.push(resolved);
+                }
+
+                notes.push(format!(
+                    "stopping=PenaltyPath(len={}), primary_index=0",
+                    resolved_path.len()
+                ));
+
+                let selections = run_dynp_penalty_path(
+                    &self.cost_model,
+                    &cache,
+                    x,
+                    &validated,
+                    betas.as_slice(),
+                    cancel_check_every,
+                    ctx,
+                    started_at,
+                    &mut runtime,
+                )?;
+
+                for (idx, (resolved, selection)) in
+                    resolved_path.iter().zip(selections.iter()).enumerate()
+                {
+                    notes.push(format!(
+                        "penalty_path[{idx}]: penalty={:?}, beta={}, params_per_segment={} (model_default), change_count={}, objective={}, penalized_objective={}",
+                        resolved.penalty,
+                        resolved.beta,
+                        resolved.params_per_segment,
+                        selection.kernel.change_count,
+                        selection.kernel.objective,
+                        selection.penalized_objective
+                    ));
+                }
+
+                selections
+                    .into_iter()
+                    .next()
+                    .expect("PenaltyPath validated to be non-empty")
+                    .kernel
             }
         };
 
@@ -574,15 +887,141 @@ mod tests {
     }
 
     #[test]
-    fn penalized_stopping_is_not_supported() {
-        let err = Dynp::new(
+    fn penalized_matches_pelt_for_manual_penalty() {
+        let values = vec![
+            0.0, 0.0, 0.0, 0.0, 10.0, 10.0, 10.0, 10.0, -4.0, -4.0, -4.0, -4.0,
+        ];
+        let view = make_f64_view(
+            &values,
+            values.len(),
+            1,
+            MemoryLayout::CContiguous,
+            MissingPolicy::Error,
+        );
+        let constraints = constraints_with_min_segment_len(2);
+        let ctx = ExecutionContext::new(&constraints);
+
+        let dynp = Dynp::new(
             CostL2Mean::default(),
             DynpConfig {
                 stopping: Stopping::Penalized(Penalty::Manual(1.0)),
                 cancel_check_every: 16,
             },
         )
-        .expect_err("penalized stopping should be rejected at config validation");
-        assert!(err.to_string().contains("must be KnownK"));
+        .expect("penalized config should be valid");
+        let pelt = Pelt::new(
+            CostL2Mean::default(),
+            PeltConfig {
+                stopping: Stopping::Penalized(Penalty::Manual(1.0)),
+                params_per_segment: 2,
+                cancel_check_every: 16,
+            },
+        )
+        .expect("pelt config should be valid");
+
+        let dynp_result = dynp
+            .detect(&view, &ctx)
+            .expect("dynp penalized should succeed");
+        let pelt_result = pelt
+            .detect(&view, &ctx)
+            .expect("pelt penalized should succeed");
+        assert_eq!(dynp_result.breakpoints, pelt_result.breakpoints);
+    }
+
+    #[test]
+    fn penalized_respects_max_change_points_cap() {
+        let detector = Dynp::new(
+            CostL2Mean::default(),
+            DynpConfig {
+                stopping: Stopping::Penalized(Penalty::Manual(0.1)),
+                cancel_check_every: 8,
+            },
+        )
+        .expect("penalized config should be valid");
+
+        let values = vec![
+            0.0, 0.0, 0.0, 0.0, 10.0, 10.0, 10.0, 10.0, -4.0, -4.0, -4.0, -4.0,
+        ];
+        let view = make_f64_view(
+            &values,
+            values.len(),
+            1,
+            MemoryLayout::CContiguous,
+            MissingPolicy::Error,
+        );
+        let constraints = Constraints {
+            min_segment_len: 2,
+            max_change_points: Some(1),
+            ..Constraints::default()
+        };
+        let ctx = ExecutionContext::new(&constraints);
+        let result = detector
+            .detect(&view, &ctx)
+            .expect("dynp penalized should succeed");
+
+        assert!(result.change_points.len() <= 1);
+    }
+
+    #[test]
+    fn penalty_path_uses_primary_index_zero_and_records_notes() {
+        let values = vec![
+            0.0, 0.0, 0.0, 0.0, 10.0, 10.0, 10.0, 10.0, -4.0, -4.0, -4.0, -4.0,
+        ];
+        let view = make_f64_view(
+            &values,
+            values.len(),
+            1,
+            MemoryLayout::CContiguous,
+            MissingPolicy::Error,
+        );
+        let constraints = constraints_with_min_segment_len(2);
+        let ctx = ExecutionContext::new(&constraints);
+
+        let primary_detector = Dynp::new(
+            CostL2Mean::default(),
+            DynpConfig {
+                stopping: Stopping::Penalized(Penalty::Manual(0.1)),
+                cancel_check_every: 8,
+            },
+        )
+        .expect("primary penalized config should be valid");
+        let path_detector = Dynp::new(
+            CostL2Mean::default(),
+            DynpConfig {
+                stopping: Stopping::PenaltyPath(vec![Penalty::Manual(0.1), Penalty::Manual(80.0)]),
+                cancel_check_every: 8,
+            },
+        )
+        .expect("penalty path config should be valid");
+
+        let primary_result = primary_detector
+            .detect(&view, &ctx)
+            .expect("primary run should succeed");
+        let path_result = path_detector
+            .detect(&view, &ctx)
+            .expect("path run should succeed");
+
+        assert_eq!(path_result.breakpoints, primary_result.breakpoints);
+        assert!(
+            path_result
+                .diagnostics
+                .notes
+                .iter()
+                .any(|note| note == "stopping=PenaltyPath(len=2), primary_index=0")
+        );
+        assert!(
+            path_result
+                .diagnostics
+                .notes
+                .iter()
+                .any(|note| note.contains("penalty_path[0]:"))
+        );
+        assert!(
+            path_result
+                .diagnostics
+                .notes
+                .iter()
+                .any(|note| note.contains("penalty_path[1]:"))
+        );
     }
 }
