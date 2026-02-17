@@ -420,7 +420,7 @@ fn with_stopping_and_seed(
         OfflineDetectorConfig::SegNeigh(config) => {
             if config.stopping != *stopping {
                 return Err(CpdError::invalid_input(format!(
-                    "offline pipeline has inconsistent stopping configuration for detector=segneigh: detector.stopping={:?}, pipeline.stopping={:?}",
+                    "offline pipeline has inconsistent stopping configuration for detector=dynp: detector.stopping={:?}, pipeline.stopping={:?}",
                     config.stopping, stopping
                 )));
             }
@@ -2959,18 +2959,18 @@ fn build_offline_candidates(
                 constraints: base_constraints.clone(),
             },
             pipeline_id: format!(
-                "offline:segneigh:{normal_cost_name}:jump={}",
+                "offline:dynp:{normal_cost_name}:jump={}",
                 base_constraints.jump
             ),
             warnings: {
                 let mut warnings = vec![
-                    "SegNeigh exact DP can be expensive; runtime/memory may grow quickly with larger n and k"
+                    "Dynp exact DP can be expensive; runtime/memory may grow quickly with larger n and k"
                         .to_string(),
                 ];
                 warnings.extend(normal_cost_warnings.clone());
                 warnings
             },
-            primary_reason: "small-n branch uses exact SegNeigh dynamic programming".to_string(),
+            primary_reason: "small-n branch uses exact Dynp dynamic programming".to_string(),
             driver_keys: vec!["regime_change_proxy", "change_density_score", "nan_rate"],
             profile: PerformanceProfile {
                 speed: 0.55,
@@ -3335,18 +3335,18 @@ fn pipeline_label(pipeline: &PipelineConfig) -> &'static str {
             }
             (OfflineDetectorConfig::Wbs(_), OfflineCostKind::Nig) => "WBS + NIG",
             (OfflineDetectorConfig::Wbs(_), OfflineCostKind::Rank) => "WBS + Rank",
-            (OfflineDetectorConfig::SegNeigh(_), OfflineCostKind::Ar) => "SegNeigh + AR",
-            (OfflineDetectorConfig::SegNeigh(_), OfflineCostKind::Cosine) => "SegNeigh + Cosine",
+            (OfflineDetectorConfig::SegNeigh(_), OfflineCostKind::Ar) => "Dynp + AR",
+            (OfflineDetectorConfig::SegNeigh(_), OfflineCostKind::Cosine) => "Dynp + Cosine",
             (OfflineDetectorConfig::SegNeigh(_), OfflineCostKind::L1Median) => {
-                "SegNeigh + L1 median"
+                "Dynp + L1 median"
             }
-            (OfflineDetectorConfig::SegNeigh(_), OfflineCostKind::L2) => "SegNeigh + L2",
-            (OfflineDetectorConfig::SegNeigh(_), OfflineCostKind::Normal) => "SegNeigh + Normal",
+            (OfflineDetectorConfig::SegNeigh(_), OfflineCostKind::L2) => "Dynp + L2",
+            (OfflineDetectorConfig::SegNeigh(_), OfflineCostKind::Normal) => "Dynp + Normal",
             (OfflineDetectorConfig::SegNeigh(_), OfflineCostKind::NormalFullCov) => {
-                "SegNeigh + Normal (full covariance)"
+                "Dynp + Normal (full covariance)"
             }
-            (OfflineDetectorConfig::SegNeigh(_), OfflineCostKind::Nig) => "SegNeigh + NIG",
-            (OfflineDetectorConfig::SegNeigh(_), OfflineCostKind::Rank) => "SegNeigh + Rank",
+            (OfflineDetectorConfig::SegNeigh(_), OfflineCostKind::Nig) => "Dynp + NIG",
+            (OfflineDetectorConfig::SegNeigh(_), OfflineCostKind::Rank) => "Dynp + Rank",
         },
         PipelineConfig::Online { detector } => match detector {
             OnlineDetectorConfig::Bocpd(config) => match config.observation {
@@ -3543,7 +3543,7 @@ fn pipeline_id(pipeline: &PipelineConfig) -> String {
                 OfflineDetectorConfig::BinSeg(_) => "binseg",
                 OfflineDetectorConfig::Fpop(_) => "fpop",
                 OfflineDetectorConfig::Wbs(_) => "wbs",
-                OfflineDetectorConfig::SegNeigh(_) => "segneigh",
+                OfflineDetectorConfig::SegNeigh(_) => "dynp",
             };
             let cost_name = match cost {
                 OfflineCostKind::Ar => "ar",
@@ -3686,7 +3686,7 @@ mod tests {
                     OfflineDetectorConfig::BinSeg(_) => "binseg",
                     OfflineDetectorConfig::Fpop(_) => "fpop",
                     OfflineDetectorConfig::Wbs(_) => "wbs",
-                    OfflineDetectorConfig::SegNeigh(_) => "segneigh",
+                    OfflineDetectorConfig::SegNeigh(_) => "dynp",
                 });
                 costs.insert(match cost {
                     OfflineCostKind::Ar => "ar",
@@ -3825,7 +3825,7 @@ mod tests {
     }
 
     #[test]
-    fn small_n_exact_branch_uses_segneigh_and_no_dynp_unavailable_warning() {
+    fn small_n_exact_branch_uses_dynp_and_no_dynp_unavailable_warning() {
         let values = vec![0.0; 256];
         let view = make_univariate_view(&values);
         let flags = super::SignalFlags {
@@ -3852,7 +3852,7 @@ mod tests {
 
         let small_n_candidate = candidates
             .iter()
-            .find(|candidate| candidate.pipeline_id.starts_with("offline:segneigh:"))
+            .find(|candidate| candidate.pipeline_id.starts_with("offline:dynp:"))
             .expect("small-n exact candidate should be present");
         match &small_n_candidate.pipeline {
             PipelineConfig::Offline {
@@ -4794,7 +4794,7 @@ mod tests {
                 .expect("short recommendation");
         collect_offline_coverage(&short_recommendations, &mut detectors, &mut costs);
 
-        let expected_detectors = ["binseg", "fpop", "pelt", "wbs"]
+        let expected_detectors = ["binseg", "dynp", "fpop", "pelt", "wbs"]
             .into_iter()
             .collect::<BTreeSet<_>>();
         let expected_costs = ["ar", "l1_median", "l2", "nig", "normal"]
