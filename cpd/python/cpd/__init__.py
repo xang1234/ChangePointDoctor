@@ -1,4 +1,4 @@
-"""Python bindings for cpd-rs."""
+"""Python bindings for changepoint-doctor."""
 
 from ._cpd_rs import (
     Binseg,

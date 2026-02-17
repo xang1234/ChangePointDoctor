@@ -20,15 +20,10 @@ jobs:
       full_matrix: ${{ steps.emit.outputs.full_matrix }}
     steps:
       - id: emit
-        env:
-          ENABLE_MACOS_WHEELS: ${{ vars.ENABLE_MACOS_WHEELS }}
         shell: bash
         run: |
           python3 - <<'PY' >> "$GITHUB_OUTPUT"
           import json
-          import os
-
-          enable_macos = os.environ.get("ENABLE_MACOS_WHEELS", "").lower() == "true"
 
           tiered = {
               "include": [
@@ -64,30 +59,24 @@ jobs:
                       "numpy_series": "2.*",
                       "experimental": True,
                   },
+                  {
+                      "runner": "macos-13",
+                      "runner_arch": "x86_64",
+                      "platform_artifact": "macos-universal2",
+                      "python_version": "3.11",
+                      "numpy_series": "1.26.*",
+                      "experimental": False,
+                  },
+                  {
+                      "runner": "macos-14",
+                      "runner_arch": "arm64",
+                      "platform_artifact": "macos-universal2",
+                      "python_version": "3.12",
+                      "numpy_series": "2.*",
+                      "experimental": False,
+                  },
               ]
           }
-
-          if enable_macos:
-              tiered["include"].extend(
-                  [
-                      {
-                          "runner": "macos-13",
-                          "runner_arch": "x86_64",
-                          "platform_artifact": "macos-universal2",
-                          "python_version": "3.11",
-                          "numpy_series": "1.26.*",
-                          "experimental": False,
-                      },
-                      {
-                          "runner": "macos-14",
-                          "runner_arch": "arm64",
-                          "platform_artifact": "macos-universal2",
-                          "python_version": "3.12",
-                          "numpy_series": "2.*",
-                          "experimental": False,
-                      },
-                  ]
-              )
 
           platform_map = {
               "ubuntu-latest": ("linux-manylinux-x86_64", "x86_64"),
@@ -95,9 +84,7 @@ jobs:
               "macos-13": ("macos-universal2", "x86_64"),
               "macos-14": ("macos-universal2", "arm64"),
           }
-          runners = ["ubuntu-latest", "windows-2022"]
-          if enable_macos:
-              runners.extend(["macos-13", "macos-14"])
+          runners = ["ubuntu-latest", "windows-2022", "macos-13", "macos-14"]
           full_rows = []
           for runner in runners:
               artifact, arch = platform_map[runner]
@@ -158,7 +145,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install --upgrade "numpy==${{ matrix.numpy_series }}"
-          python -m pip install --no-index --find-links wheelhouse cpd-rs
+          python -m pip install --no-index --find-links wheelhouse changepoint-doctor
 
       - name: Inline import and API smoke
         run: |
@@ -231,7 +218,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install --upgrade "numpy==${{ matrix.numpy_series }}"
-          python -m pip install --no-index --find-links wheelhouse cpd-rs
+          python -m pip install --no-index --find-links wheelhouse changepoint-doctor
 
       - name: Inline import and API smoke
         run: |

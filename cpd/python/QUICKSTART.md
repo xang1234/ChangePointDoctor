@@ -1,6 +1,14 @@
 # Quickstart (MVP-A)
 
-## 1. Build and import the extension
+## 1. Install from PyPI (release artifacts)
+
+```bash
+python -m pip install --upgrade pip
+python -m pip install changepoint-doctor==0.0.1
+python -c "import cpd; print(cpd.__version__)"
+```
+
+## 2. Build and import the extension (from source)
 
 ```bash
 cd cpd/python
@@ -14,7 +22,7 @@ steps in
 [`../docs/python_apple_silicon_toolchain.md`](../docs/python_apple_silicon_toolchain.md)
 before or after this build step when diagnosing linker/import failures.
 
-## 2. Detect change points with high-level APIs
+## 3. Detect change points with high-level APIs
 
 ```python
 import numpy as np
@@ -41,7 +49,7 @@ Expected breakpoints:
 [50, 100, 150]
 ```
 
-## 3. Use low-level `detect_offline(...)`
+## 4. Use low-level `detect_offline(...)`
 
 For mode semantics (`strict`/`balanced`/`fast`) and reproducibility guarantees,
 see [`../docs/reproducibility_modes.md`](../docs/reproducibility_modes.md).
@@ -75,7 +83,7 @@ print("Cost model:", low_level.diagnostics.cost_model)
 `preprocess` is strictly validated: unsupported keys or invalid method/parameter
 combinations raise `ValueError`.
 
-## 4. Serialize results and plot breakpoints
+## 5. Serialize results and plot breakpoints
 
 ```python
 import cpd
@@ -122,7 +130,7 @@ Compatibility + limitations to keep in mind:
 - `plot()` is optional (`matplotlib`) and `plot(ax=...)` is univariate-only.
 - If `segments` are absent in a result, pass explicit `values` to `plot(...)`.
 
-## 5. Run provided examples
+## 6. Run provided examples
 
 ```bash
 cpd/python/.venv/bin/python cpd/python/examples/synthetic_signal.py

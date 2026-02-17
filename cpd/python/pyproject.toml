@@ -3,10 +3,28 @@ requires = ["maturin>=1,<2"]
 build-backend = "maturin"
 
 [project]
-name = "cpd-rs"
+name = "changepoint-doctor"
 dynamic = ["version"]
+description = "Fast change-point detection bindings backed by Rust."
+readme = "README.md"
+license = { text = "MIT OR Apache-2.0" }
+authors = [{ name = "cpd-rs contributors" }]
 requires-python = ">=3.9"
 dependencies = ["numpy>=1.20"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Rust",
+  "License :: OSI Approved :: Apache Software License",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+  "Topic :: Scientific/Engineering",
+]
+
+[project.urls]
+Homepage = "https://github.com/xang1234/dr-changepoint"
+Repository = "https://github.com/xang1234/dr-changepoint"
+Issues = "https://github.com/xang1234/dr-changepoint/issues"
 
 [tool.maturin]
 bindings = "pyo3"

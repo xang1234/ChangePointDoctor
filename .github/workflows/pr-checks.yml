@@ -257,10 +257,10 @@ jobs:
           import subprocess
           import sys
 
-          wheels = sorted(Path("../target/wheels").glob("cpd_rs-*.whl"))
+          wheels = sorted(Path("../target/wheels").glob("changepoint_doctor-*.whl"))
           if len(wheels) != 1:
               raise SystemExit(
-                  f"expected exactly one cpd-rs wheel, found {len(wheels)}: {[str(w) for w in wheels]}"
+                  f"expected exactly one changepoint-doctor wheel, found {len(wheels)}: {[str(w) for w in wheels]}"
               )
           subprocess.check_call(
               [sys.executable, "-m", "pip", "install", "--force-reinstall", str(wheels[0])]
@@ -326,10 +326,10 @@ jobs:
           import subprocess
           import sys
 
-          wheels = sorted(Path("../target/wheels").glob("cpd_rs-*.whl"))
+          wheels = sorted(Path("../target/wheels").glob("changepoint_doctor-*.whl"))
           if len(wheels) != 1:
               raise SystemExit(
-                  f"expected exactly one cpd-rs wheel, found {len(wheels)}: {[str(w) for w in wheels]}"
+                  f"expected exactly one changepoint-doctor wheel, found {len(wheels)}: {[str(w) for w in wheels]}"
               )
           subprocess.check_call(
               [sys.executable, "-m", "pip", "install", "--force-reinstall", str(wheels[0])]

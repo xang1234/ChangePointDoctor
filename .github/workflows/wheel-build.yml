@@ -22,15 +22,10 @@ jobs:
       build_matrix: ${{ steps.emit.outputs.build_matrix }}
     steps:
       - id: emit
-        env:
-          ENABLE_MACOS_WHEELS: ${{ vars.ENABLE_MACOS_WHEELS }}
         shell: bash
         run: |
           python3 - <<'PY' >> "$GITHUB_OUTPUT"
           import json
-          import os
-
-          enable_macos = os.environ.get("ENABLE_MACOS_WHEELS", "").lower() == "true"
 
           include = [
               {
@@ -39,19 +34,16 @@ jobs:
                   "cibw_archs": "x86_64",
               },
               {
+                  "runner": "macos-13",
+                  "platform_artifact": "macos-universal2",
+                  "cibw_archs": "universal2",
+              },
+              {
                   "runner": "windows-2022",
                   "platform_artifact": "windows-amd64",
                   "cibw_archs": "AMD64",
               },
           ]
-          if enable_macos:
-              include.append(
-                  {
-                      "runner": "macos-13",
-                      "platform_artifact": "macos-universal2",
-                      "cibw_archs": "universal2",
-                  }
-              )
 
           print(f"build_matrix={json.dumps({'include': include}, separators=(',', ':'))}")
           PY

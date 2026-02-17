@@ -1,11 +1,18 @@
-# cpd-rs Python Bindings (MVP-A)
+# changepoint-doctor Python Bindings (MVP-A)
 
-`cpd-rs` exposes fast offline change-point detection from Rust into Python.
+`changepoint-doctor` exposes fast offline change-point detection from Rust into Python.
 
 For citation and provenance policy, see [`../CITATION.cff`](../CITATION.cff)
 and [`../docs/clean_room_policy.md`](../docs/clean_room_policy.md).
 
 ## Install
+
+From PyPI (target release `0.0.1`):
+
+```bash
+python -m pip install --upgrade pip
+python -m pip install changepoint-doctor==0.0.1
+```
 
 For local development from this repository:
 
