@@ -58,6 +58,11 @@ Asymptotically:
 - `CostNormalMeanVar`: `O(d)` per segment query.
 - `CostNormalFullCov`: `O(d^2)` covariance assembly + `O(d^3)` Cholesky log-det per segment query.
 
+## Penalty Scaling (BIC/AIC)
+
+- `CostNormalMeanVar` uses linear model complexity (`effective_params = d * 3`).
+- `CostNormalFullCov` uses model-aware complexity (`effective_params = 1 + d + d(d+1)/2`), so automatic penalties scale with full-covariance parameter growth.
+
 ## Verification Coverage
 
 - Additive cross-model checks (`d=8`, `d=16`) live in `cpd/crates/cpd-costs/tests/multivariate_v1.rs`.

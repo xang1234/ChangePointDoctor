@@ -5,7 +5,8 @@
 use cpd_core::{
     BudgetStatus, CpdError, Diagnostics, ExecutionContext, OfflineChangePointResult,
     OfflineDetector, Penalty, PruningStats, Stopping, TimeSeriesView, ValidatedConstraints,
-    check_missing_compatibility, penalty_value, validate_constraints, validate_stopping,
+    check_missing_compatibility, penalty_value_from_effective_params, validate_constraints,
+    validate_stopping,
 };
 use cpd_costs::{CostL2Mean, CostModel};
 use std::borrow::Cow;
@@ -150,7 +151,26 @@ fn resolve_penalty_beta(
             "resolved params_per_segment must be >= 1; got 0",
         ));
     }
-    let beta = penalty_value(penalty, n, d, params_per_segment)?;
+    let beta = match penalty {
+        Penalty::Manual(value) => *value,
+        Penalty::BIC | Penalty::AIC => {
+            let effective_params = if matches!(params_source, "model_default") {
+                model.penalty_effective_params(d).ok_or_else(|| {
+                    CpdError::invalid_input(format!(
+                        "model_default effective-params overflow for d={d}, model={}",
+                        model.name()
+                    ))
+                })?
+            } else {
+                d.checked_mul(params_per_segment).ok_or_else(|| {
+                    CpdError::invalid_input(format!(
+                        "effective params overflow: d * params_per_segment exceeds usize (d={d}, params_per_segment={params_per_segment})"
+                    ))
+                })?
+            };
+            penalty_value_from_effective_params(penalty, n, effective_params)?
+        }
+    };
     if !beta.is_finite() || beta <= 0.0 {
         return Err(CpdError::invalid_input(format!(
             "resolved penalty must be finite and > 0.0; got beta={beta}"

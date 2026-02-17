@@ -40,6 +40,16 @@ pub trait CostModel {
         2
     }
 
+    /// Effective model complexity term used by BIC/AIC penalties.
+    ///
+    /// The default implementation follows the historical linear rule
+    /// `effective_params = d * penalty_params_per_segment()`. Models with
+    /// non-linear multivariate complexity (for example full covariance terms)
+    /// can override this method.
+    fn penalty_effective_params(&self, d: usize) -> Option<usize> {
+        d.checked_mul(self.penalty_params_per_segment())
+    }
+
     /// Returns the cost for segment `[start, end)`.
     fn segment_cost(&self, cache: &Self::Cache, start: usize, end: usize) -> f64;
 
@@ -214,6 +224,7 @@ mod tests {
         assert_eq!(model.missing_support(), MissingSupport::Reject);
         assert!(!model.supports_approx_cache());
         assert_eq!(model.penalty_params_per_segment(), 2);
+        assert_eq!(model.penalty_effective_params(3), Some(6));
     }
 
     #[test]

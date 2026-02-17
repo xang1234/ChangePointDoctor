@@ -46,7 +46,10 @@ pub use schema_migration::{
     MAX_FORWARD_COMPAT_SCHEMA_VERSION, MIGRATION_GUIDANCE_PATH, OfflineChangePointResultWire,
     validate_schema_version,
 };
-pub use stopping::{Penalty, Stopping, penalty_value, validate_penalty, validate_stopping};
+pub use stopping::{
+    Penalty, Stopping, checked_effective_params, penalty_value,
+    penalty_value_from_effective_params, validate_penalty, validate_stopping,
+};
 pub use time_series::{DTypeView, MemoryLayout, MissingPolicy, TimeIndex, TimeSeriesView};
 
 /// Core shared types and traits for cpd-rs.

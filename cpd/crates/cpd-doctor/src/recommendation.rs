@@ -2590,6 +2590,33 @@ fn build_candidates(
     candidates
 }
 
+fn normal_family_offline_cost(x: &TimeSeriesView<'_>, flags: SignalFlags) -> OfflineCostKind {
+    if x.d > 1 && x.d <= 16 && !flags.huge_n {
+        OfflineCostKind::NormalFullCov
+    } else {
+        OfflineCostKind::Normal
+    }
+}
+
+fn normal_family_cost_name(cost: OfflineCostKind) -> &'static str {
+    match cost {
+        OfflineCostKind::Normal => "normal",
+        OfflineCostKind::NormalFullCov => "normal_full_cov",
+        _ => unreachable!("normal-family helper expects Normal or NormalFullCov"),
+    }
+}
+
+fn normal_family_cost_warnings(cost: OfflineCostKind) -> Vec<String> {
+    if matches!(cost, OfflineCostKind::NormalFullCov) {
+        vec![
+            "CostNormalFullCov is heavier than diagonal Normal (cache O(n*d^2), segment solve O(d^3)); use when cross-dimension covariance carries signal"
+                .to_string(),
+        ]
+    } else {
+        Vec::new()
+    }
+}
+
 fn build_offline_candidates(
     x: &TimeSeriesView<'_>,
     base_constraints: &Constraints,
@@ -2597,6 +2624,10 @@ fn build_offline_candidates(
     out: &mut Vec<Candidate>,
     seen: &mut BTreeSet<String>,
 ) {
+    let normal_cost = normal_family_offline_cost(x, flags);
+    let normal_cost_name = normal_family_cost_name(normal_cost);
+    let normal_cost_warnings = normal_family_cost_warnings(normal_cost);
+
     if flags.huge_n {
         if flags.autocorrelated {
             let constraints = apply_jump_thinning(base_constraints, x.n, true);
@@ -2718,11 +2749,14 @@ fn build_offline_candidates(
             let candidate = Candidate {
                 pipeline: PipelineConfig::Offline {
                     detector: OfflineDetectorConfig::Wbs(wbs),
-                    cost: OfflineCostKind::Normal,
+                    cost: normal_cost,
                     constraints: base_constraints.clone(),
                 },
-                pipeline_id: format!("offline:wbs:normal:jump={}", base_constraints.jump),
-                warnings: vec![],
+                pipeline_id: format!(
+                    "offline:wbs:{normal_cost_name}:jump={}",
+                    base_constraints.jump
+                ),
+                warnings: normal_cost_warnings.clone(),
                 primary_reason:
                     "few strong changes with masking risk favors WBS to reduce masking artifacts"
                         .to_string(),
@@ -2744,11 +2778,14 @@ fn build_offline_candidates(
             let candidate = Candidate {
                 pipeline: PipelineConfig::Offline {
                     detector: OfflineDetectorConfig::BinSeg(BinSegConfig::default()),
-                    cost: OfflineCostKind::Normal,
+                    cost: normal_cost,
                     constraints: base_constraints.clone(),
                 },
-                pipeline_id: format!("offline:binseg:normal:jump={}", base_constraints.jump),
-                warnings: vec![],
+                pipeline_id: format!(
+                    "offline:binseg:{normal_cost_name}:jump={}",
+                    base_constraints.jump
+                ),
+                warnings: normal_cost_warnings.clone(),
                 primary_reason:
                     "few strong changes in medium-n series favors BinSeg for fast hierarchy"
                         .to_string(),
@@ -2830,13 +2867,19 @@ fn build_offline_candidates(
         let candidate = Candidate {
             pipeline: PipelineConfig::Offline {
                 detector: OfflineDetectorConfig::BinSeg(BinSegConfig::default()),
-                cost: OfflineCostKind::Normal,
+                cost: normal_cost,
                 constraints: base_constraints.clone(),
             },
-            pipeline_id: format!("offline:binseg:normal:jump={}", base_constraints.jump),
-            warnings: vec![
-                "Dynp is unavailable; mapped small-n exact branch to BinSeg".to_string(),
-            ],
+            pipeline_id: format!(
+                "offline:binseg:{normal_cost_name}:jump={}",
+                base_constraints.jump
+            ),
+            warnings: {
+                let mut warnings =
+                    vec!["Dynp is unavailable; mapped small-n exact branch to BinSeg".to_string()];
+                warnings.extend(normal_cost_warnings.clone());
+                warnings
+            },
             primary_reason:
                 "small-n branch mapped to BinSeg as nearest available exact-like option".to_string(),
             driver_keys: vec!["regime_change_proxy", "change_density_score", "nan_rate"],
@@ -3806,6 +3849,46 @@ mod tests {
     }
 
     #[test]
+    fn recommend_offline_multivariate_surfaces_full_covariance_normal_cost() {
+        let n = 512;
+        let d = 4;
+        let mut values = vec![0.0; n * d];
+        for t in 0..n {
+            let regime_shift = if t < n / 2 { 0.0 } else { 5.0 };
+            let base = regime_shift + 0.01 * t as f64;
+            for dim in 0..d {
+                values[t * d + dim] = base * (1.0 + 0.1 * dim as f64);
+            }
+        }
+
+        let view = make_multivariate_view(values.as_slice(), n, d);
+        let recommendations =
+            recommend(&view, Objective::Balanced, false, None, 0.20, true).expect("recommend");
+        assert!(!recommendations.is_empty());
+
+        let has_full_cov = recommendations.iter().any(|recommendation| {
+            matches!(
+                recommendation
+                    .pipeline
+                    .to_pipeline_config()
+                    .expect("pipeline should convert"),
+                PipelineConfig::Offline {
+                    cost: OfflineCostKind::NormalFullCov,
+                    ..
+                }
+            )
+        });
+        assert!(
+            has_full_cov,
+            "expected at least one multivariate recommendation to use normal_full_cov, got {:?}",
+            recommendations
+                .iter()
+                .map(|entry| super::pipeline_id_spec(&entry.pipeline))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
     fn recommend_online_binary_prefers_bocpd_bernoulli() {
         let values = (0..1024)
             .map(|idx| if idx % 2 == 0 { 0.0 } else { 1.0 })
@@ -4736,6 +4819,54 @@ mod tests {
         let result = super::execute_pipeline_with_repro_mode(&view, &pipeline, ReproMode::Fast)
             .expect("offline pipeline should execute under fast repro mode");
         assert_eq!(result.breakpoints, vec![3, 6, 9]);
+    }
+
+    #[test]
+    fn execute_pipeline_with_repro_mode_runs_normal_full_cov_spec() {
+        let n = 12;
+        let d = 2;
+        let mut values = vec![0.0; n * d];
+        for t in 0..n {
+            let base = if t < 6 {
+                0.1 * t as f64
+            } else {
+                5.0 + 0.1 * t as f64
+            };
+            values[t * d] = base;
+            values[t * d + 1] = 1.1 * base + 0.01 * (t as f64).cos();
+        }
+        let view = make_multivariate_view(&values, n, d);
+        let stopping = Stopping::KnownK(1);
+        let pipeline = PipelineSpec {
+            detector: DetectorConfig::Offline(OfflineDetectorConfig::Pelt(
+                cpd_offline::PeltConfig {
+                    stopping: stopping.clone(),
+                    ..cpd_offline::PeltConfig::default()
+                },
+            )),
+            cost: CostConfig::NormalFullCov,
+            preprocess: None,
+            constraints: Constraints {
+                min_segment_len: 2,
+                ..Constraints::default()
+            },
+            stopping: Some(stopping),
+            seed: None,
+        };
+
+        let result = super::execute_pipeline_with_repro_mode(&view, &pipeline, ReproMode::Balanced)
+            .expect("normal_full_cov offline pipeline should execute");
+        assert_eq!(result.diagnostics.cost_model, "normal_full_cov");
+        assert_eq!(result.breakpoints.last().copied(), Some(n));
+        let first = result
+            .change_points
+            .first()
+            .copied()
+            .expect("KnownK(1) should produce one change point");
+        assert!(
+            first.abs_diff(6) <= 1,
+            "expected a changepoint near 6, got {first}"
+        );
     }
 
     #[test]

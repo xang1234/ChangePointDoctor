@@ -7,10 +7,15 @@ use cpd_core::{
     CachePolicy, CpdError, DTypeView, MemoryLayout, MissingSupport, ReproMode, TimeSeriesView,
     prefix_sum_squares, prefix_sum_squares_kahan, prefix_sums, prefix_sums_kahan,
 };
+use std::cell::RefCell;
 
 const VAR_FLOOR: f64 = f64::EPSILON * 1e6;
 const FULL_COV_RIDGE_RELATIVE: f64 = 1.0e-6;
 const FULL_COV_MAX_JITTER_TRIALS: usize = 8;
+
+thread_local! {
+    static FULL_COV_WORKSPACE: RefCell<Vec<f64>> = RefCell::new(Vec::new());
+}
 
 /// Gaussian segment cost model with MLE mean and variance.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -303,9 +308,17 @@ fn cholesky_logdet_in_place(matrix: &mut [f64], d: usize) -> Option<f64> {
     }
 }
 
-fn regularized_logdet(covariance: &[f64], d: usize, base_ridge: f64) -> f64 {
+fn regularized_logdet_with_scratch(
+    covariance: &mut [f64],
+    scratch: &mut [f64],
+    d: usize,
+    base_ridge: f64,
+) -> f64 {
+    debug_assert_eq!(covariance.len(), d * d);
+    debug_assert_eq!(scratch.len(), d * d);
+
     let mut scale = base_ridge.max(VAR_FLOOR);
-    for value in covariance {
+    for value in covariance.iter().copied() {
         let abs = value.abs();
         if abs.is_finite() && abs > scale {
             scale = abs;
@@ -316,10 +329,9 @@ fn regularized_logdet(covariance: &[f64], d: usize, base_ridge: f64) -> f64 {
     }
 
     let inv_scale = 1.0 / scale;
-    let mut scaled = vec![0.0; d * d];
     for (idx, value) in covariance.iter().copied().enumerate() {
         let normalized = normalize_covariance_entry(value * inv_scale);
-        scaled[idx] = if normalized.is_finite() {
+        scratch[idx] = if normalized.is_finite() {
             normalized
         } else if normalized.is_sign_positive() {
             f64::MAX
@@ -330,12 +342,13 @@ fn regularized_logdet(covariance: &[f64], d: usize, base_ridge: f64) -> f64 {
 
     let mut jitter = base_ridge.max(VAR_FLOOR);
     for _ in 0..FULL_COV_MAX_JITTER_TRIALS {
-        let mut attempt = scaled.clone();
+        covariance.copy_from_slice(scratch);
         let scaled_jitter = (jitter * inv_scale).max(VAR_FLOOR);
         for i in 0..d {
-            attempt[i * d + i] = normalize_covariance_entry(attempt[i * d + i] + scaled_jitter);
+            covariance[i * d + i] =
+                normalize_covariance_entry(covariance[i * d + i] + scaled_jitter);
         }
-        if let Some(log_det_scaled) = cholesky_logdet_in_place(&mut attempt, d) {
+        if let Some(log_det_scaled) = cholesky_logdet_in_place(covariance, d) {
             return d as f64 * scale.ln() + log_det_scaled;
         }
         jitter *= 10.0;
@@ -515,6 +528,12 @@ impl CostModel for CostNormalFullCov {
         3
     }
 
+    fn penalty_effective_params(&self, d: usize) -> Option<usize> {
+        let mean_params = d;
+        let covariance_params = triangular_pair_count(d)?;
+        mean_params.checked_add(covariance_params)?.checked_add(1)
+    }
+
     fn validate(&self, x: &TimeSeriesView<'_>) -> Result<(), CpdError> {
         if x.n == 0 {
             return Err(CpdError::invalid_input(
@@ -675,7 +694,6 @@ impl CostModel for CostNormalFullCov {
         );
 
         let m = (end - start) as f64;
-        let prefix_len = cache.prefix_len_per_dim();
 
         if cache.d == 1 {
             let sum = cache.prefix_sum[end] - cache.prefix_sum[start];
@@ -685,39 +703,46 @@ impl CostModel for CostNormalFullCov {
             return m * normalize_variance(raw_var).ln();
         }
 
-        let mut sums = vec![0.0; cache.d];
-        for (dim, slot) in sums.iter_mut().enumerate() {
-            let offset = cache.dim_offset(dim);
-            *slot = cache.prefix_sum[offset + end] - cache.prefix_sum[offset + start];
-        }
+        FULL_COV_WORKSPACE.with(|workspace| {
+            let matrix_len = cache
+                .d
+                .checked_mul(cache.d)
+                .expect("full-cov workspace length overflow");
+            let required_len = matrix_len
+                .checked_mul(2)
+                .expect("full-cov workspace length overflow");
+            let mut buffer = workspace.borrow_mut();
+            if buffer.len() < required_len {
+                buffer.resize(required_len, 0.0);
+            }
+            let (covariance, scratch_rest) = buffer.split_at_mut(matrix_len);
+            let scratch = &mut scratch_rest[..matrix_len];
 
-        let mut covariance = vec![0.0; cache.d * cache.d];
-        let mut trace = 0.0;
-        for i in 0..cache.d {
-            let mean_i = sums[i] / m;
-            for j in i..cache.d {
-                let mean_j = sums[j] / m;
-                let pair_offset = cache.pair_offset(i, j);
-                let cross =
-                    cache.prefix_cross[pair_offset + end] - cache.prefix_cross[pair_offset + start];
-                let centered = normalize_covariance_entry(cross / m - mean_i * mean_j);
-                covariance[i * cache.d + j] = centered;
-                covariance[j * cache.d + i] = centered;
-                if i == j {
-                    trace += normalize_variance(centered);
+            let mut trace = 0.0;
+            for i in 0..cache.d {
+                let i_offset = cache.dim_offset(i);
+                let mean_i =
+                    (cache.prefix_sum[i_offset + end] - cache.prefix_sum[i_offset + start]) / m;
+                for j in i..cache.d {
+                    let j_offset = cache.dim_offset(j);
+                    let mean_j =
+                        (cache.prefix_sum[j_offset + end] - cache.prefix_sum[j_offset + start]) / m;
+                    let pair_offset = cache.pair_offset(i, j);
+                    let cross = cache.prefix_cross[pair_offset + end]
+                        - cache.prefix_cross[pair_offset + start];
+                    let centered = normalize_covariance_entry(cross / m - mean_i * mean_j);
+                    covariance[i * cache.d + j] = centered;
+                    covariance[j * cache.d + i] = centered;
+                    if i == j {
+                        trace += normalize_variance(centered);
+                    }
                 }
             }
-        }
 
-        let ridge = full_cov_ridge(trace, cache.d, m);
-        let log_det = regularized_logdet(covariance.as_slice(), cache.d, ridge);
-
-        debug_assert_eq!(
-            prefix_len,
-            cache.n + 1,
-            "prefix length invariant should hold"
-        );
-        m * log_det
+            let ridge = full_cov_ridge(trace, cache.d, m);
+            let log_det = regularized_logdet_with_scratch(covariance, scratch, cache.d, ridge);
+            m * log_det
+        })
     }
 }
 
@@ -1357,6 +1382,8 @@ mod tests {
         assert_eq!(model.repro_mode, ReproMode::Balanced);
         assert_eq!(model.missing_support(), MissingSupport::Reject);
         assert!(!model.supports_approx_cache());
+        assert_eq!(model.penalty_effective_params(1), Some(3));
+        assert_eq!(model.penalty_effective_params(4), Some(15));
     }
 
     #[test]

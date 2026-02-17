@@ -139,7 +139,7 @@ BIC/AIC complexity terms are model-aware by default:
 
 - `l2` uses `params_per_segment=2` (mean + residual variance proxy)
 - `normal` uses `params_per_segment=3` (mean + variance + residual term)
-- `normal_full_cov` currently uses `params_per_segment=3` for penalty scaling (full-covariance model complexity grows with `d`; manual penalty tuning may be preferred for large `d`)
+- `normal_full_cov` uses model-aware effective complexity for BIC/AIC: `1 + d + d(d+1)/2` (mean vector + full covariance + residual term)
 
 Advanced users can still override `params_per_segment` in low-level pipeline detector config.
 

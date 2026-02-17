@@ -74,37 +74,44 @@ pub fn validate_stopping(stopping: &Stopping) -> Result<(), CpdError> {
 /// - BIC = effective_params * ln(n)
 /// - AIC = 2 * effective_params
 /// - Manual(p) = p
-pub fn penalty_value(
+pub fn checked_effective_params(d: usize, params_per_segment: usize) -> Result<usize, CpdError> {
+    if d == 0 {
+        return Err(CpdError::invalid_input(
+            "checked_effective_params requires d >= 1; got d=0",
+        ));
+    }
+    if params_per_segment == 0 {
+        return Err(CpdError::invalid_input(
+            "checked_effective_params requires params_per_segment >= 1; got 0",
+        ));
+    }
+
+    d.checked_mul(params_per_segment).ok_or_else(|| {
+        CpdError::invalid_input(format!(
+            "effective params overflow: d * params_per_segment exceeds usize (d={d}, params_per_segment={params_per_segment})"
+        ))
+    })
+}
+
+pub fn penalty_value_from_effective_params(
     penalty: &Penalty,
     n: usize,
-    d: usize,
-    params_per_segment: usize,
+    effective_params: usize,
 ) -> Result<f64, CpdError> {
     validate_penalty(penalty)?;
 
     if n == 0 {
         return Err(CpdError::invalid_input(
-            "penalty_value requires n >= 1; got n=0",
+            "penalty_value_from_effective_params requires n >= 1; got n=0",
         ));
     }
-    if d == 0 {
+    if effective_params == 0 {
         return Err(CpdError::invalid_input(
-            "penalty_value requires d >= 1; got d=0",
-        ));
-    }
-    if params_per_segment == 0 {
-        return Err(CpdError::invalid_input(
-            "penalty_value requires params_per_segment >= 1; got 0",
+            "penalty_value_from_effective_params requires effective_params >= 1; got 0",
         ));
     }
 
-    let effective_params = d.checked_mul(params_per_segment).ok_or_else(|| {
-        CpdError::invalid_input(format!(
-            "penalty_value overflow: d * params_per_segment exceeds usize (d={d}, params_per_segment={params_per_segment})"
-        ))
-    })?;
     let effective_params_f64 = effective_params as f64;
-
     let value = match penalty {
         Penalty::BIC => effective_params_f64 * (n as f64).ln(),
         Penalty::AIC => 2.0 * effective_params_f64,
@@ -114,9 +121,22 @@ pub fn penalty_value(
     Ok(value)
 }
 
+pub fn penalty_value(
+    penalty: &Penalty,
+    n: usize,
+    d: usize,
+    params_per_segment: usize,
+) -> Result<f64, CpdError> {
+    let effective_params = checked_effective_params(d, params_per_segment)?;
+    penalty_value_from_effective_params(penalty, n, effective_params)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{Penalty, Stopping, penalty_value, validate_penalty, validate_stopping};
+    use super::{
+        Penalty, Stopping, checked_effective_params, penalty_value,
+        penalty_value_from_effective_params, validate_penalty, validate_stopping,
+    };
 
     const EPS: f64 = 1e-12;
 
@@ -204,6 +224,23 @@ mod tests {
     }
 
     #[test]
+    fn penalty_value_from_effective_params_matches_dimensional_path() {
+        let from_dims = penalty_value(&Penalty::BIC, 100, 4, 3).expect("BIC should compute");
+        let from_effective = penalty_value_from_effective_params(&Penalty::BIC, 100, 12)
+            .expect("BIC should compute");
+        assert!((from_dims - from_effective).abs() < EPS);
+    }
+
+    #[test]
+    fn checked_effective_params_validates_inputs() {
+        let d_err = checked_effective_params(0, 2).expect_err("d=0 should fail");
+        assert!(d_err.to_string().contains("d >= 1"));
+
+        let pps_err = checked_effective_params(2, 0).expect_err("params=0 should fail");
+        assert!(pps_err.to_string().contains("params_per_segment"));
+    }
+
+    #[test]
     fn penalty_value_rejects_zero_inputs_and_overflow() {
         let n_err = penalty_value(&Penalty::BIC, 0, 1, 1).expect_err("n=0 should fail");
         assert!(n_err.to_string().contains("n >= 1"));
@@ -216,6 +253,10 @@ mod tests {
 
         let overflow_err =
             penalty_value(&Penalty::AIC, 10, usize::MAX, 2).expect_err("overflow should fail");
+        assert!(overflow_err.to_string().contains("overflow"));
+
+        let overflow_err =
+            checked_effective_params(usize::MAX, 2).expect_err("overflow should fail");
         assert!(overflow_err.to_string().contains("overflow"));
     }
 }

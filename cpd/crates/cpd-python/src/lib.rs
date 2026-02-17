@@ -1678,7 +1678,7 @@ fn detect_with_view(
         (PyDetectorKind::Pelt, PyCostModel::Normal) => {
             let config = PeltConfig {
                 stopping,
-                params_per_segment: 3,
+                params_per_segment: PeltConfig::default().params_per_segment,
                 cancel_check_every: 1000,
             };
             let detector = OfflinePelt::new(CostNormalMeanVar::new(repro_mode), config)?;
@@ -1687,7 +1687,7 @@ fn detect_with_view(
         (PyDetectorKind::Pelt, PyCostModel::NormalFullCov) => {
             let config = PeltConfig {
                 stopping,
-                params_per_segment: 3,
+                params_per_segment: PeltConfig::default().params_per_segment,
                 cancel_check_every: 1000,
             };
             let detector = OfflinePelt::new(CostNormalFullCov::new(repro_mode), config)?;
@@ -1714,7 +1714,7 @@ fn detect_with_view(
         (PyDetectorKind::Binseg, PyCostModel::Normal) => {
             let config = BinSegConfig {
                 stopping,
-                params_per_segment: 3,
+                params_per_segment: BinSegConfig::default().params_per_segment,
                 cancel_check_every: 1000,
             };
             let detector = OfflineBinSeg::new(CostNormalMeanVar::new(repro_mode), config)?;
@@ -1723,7 +1723,7 @@ fn detect_with_view(
         (PyDetectorKind::Binseg, PyCostModel::NormalFullCov) => {
             let config = BinSegConfig {
                 stopping,
-                params_per_segment: 3,
+                params_per_segment: BinSegConfig::default().params_per_segment,
                 cancel_check_every: 1000,
             };
             let detector = OfflineBinSeg::new(CostNormalFullCov::new(repro_mode), config)?;
@@ -3013,6 +3013,40 @@ mod tests {
             run_python(
                 py,
                 "import numpy as np\nx = np.array([[0., 0.], [0.1, 0.1], [0.2, 0.2], [5.0, 5.1], [5.2, 5.2], [5.3, 5.4]], dtype=np.float64)\nresult = cpd_rs.detect_offline(x, detector='pelt', cost='normal_full_cov', stopping={'n_bkps': 1})",
+                None,
+                Some(&locals),
+            )
+            .expect("normal_full_cov should run");
+
+            let result = locals
+                .get_item("result")
+                .expect("locals lookup should succeed")
+                .expect("result should exist");
+            let diagnostics = result
+                .getattr("diagnostics")
+                .expect("diagnostics should exist");
+            let cost_model: String = diagnostics
+                .getattr("cost_model")
+                .expect("cost_model should exist")
+                .extract()
+                .expect("cost_model should extract");
+            assert_eq!(cost_model, "normal_full_cov");
+        });
+    }
+
+    #[test]
+    fn detect_offline_supports_normal_full_cov_cost_with_binseg() {
+        with_python(|py| {
+            let module = PyModule::new(py, "_cpd_rs").expect("module should be created");
+            _cpd_rs(&module).expect("module registration should succeed");
+
+            let locals = PyDict::new(py);
+            locals
+                .set_item("cpd_rs", &module)
+                .expect("locals should accept module");
+            run_python(
+                py,
+                "import numpy as np\nx = np.array([[0., 0.], [0.1, 0.1], [0.2, 0.2], [5.0, 5.1], [5.2, 5.2], [5.3, 5.4]], dtype=np.float64)\nresult = cpd_rs.detect_offline(x, detector='binseg', cost='normal_full_cov', stopping={'n_bkps': 1})",
                 None,
                 Some(&locals),
             )
