@@ -12,7 +12,7 @@ const VAR_FLOOR: f64 = f64::EPSILON * 1e6;
 
 /// Autoregressive segment cost model.
 ///
-/// Currently supports AR(1) with intercept and Gaussian residual variance.
+/// Supports AR(p) with intercept and Gaussian residual variance.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CostAR {
     pub order: usize,
@@ -35,12 +35,13 @@ impl Default for CostAR {
     }
 }
 
-/// Prefix-stat cache for O(1) AR(1) segment-cost queries.
+/// Cache backing `CostAR` segment-cost queries.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ARCache {
     prefix_sum: Vec<f64>,
     prefix_sum_sq: Vec<f64>,
     prefix_lag_prod: Vec<f64>,
+    series_by_dim: Option<Vec<f64>>,
     n: usize,
     d: usize,
 }
@@ -52,6 +53,10 @@ impl ARCache {
 
     fn dim_offset(&self, dim: usize) -> usize {
         dim * self.prefix_len_per_dim()
+    }
+
+    fn series_offset(&self, dim: usize) -> usize {
+        dim * self.n
     }
 }
 
@@ -213,6 +218,86 @@ fn ar1_residual_sse(
     (syy - explained).max(0.0)
 }
 
+fn levinson_durbin(autocov: &[f64]) -> Vec<f64> {
+    let order = autocov.len().saturating_sub(1);
+    if order == 0 {
+        return Vec::new();
+    }
+
+    let mut coeffs = vec![0.0; order];
+    let mut prediction_err = autocov[0].max(0.0);
+    let stability_tol = 32.0 * f64::EPSILON * prediction_err.abs().max(1.0);
+
+    for k in 0..order {
+        if prediction_err <= stability_tol {
+            break;
+        }
+
+        let mut reflection = autocov[k + 1];
+        for j in 0..k {
+            reflection -= coeffs[j] * autocov[k - j];
+        }
+
+        reflection /= prediction_err;
+        if !reflection.is_finite() {
+            break;
+        }
+
+        if reflection.abs() >= 1.0 {
+            reflection = reflection.signum() * (1.0 - 1e-12);
+        }
+
+        let mut updated = coeffs.clone();
+        for j in 0..k {
+            updated[j] = coeffs[j] - reflection * coeffs[k - 1 - j];
+        }
+        updated[k] = reflection;
+        coeffs = updated;
+
+        prediction_err *= (1.0 - reflection * reflection).max(1e-12);
+    }
+
+    coeffs
+}
+
+fn arp_segment_cost(values: &[f64], order: usize) -> f64 {
+    let segment_len = values.len();
+    if segment_len <= order.saturating_add(1) {
+        return 0.0;
+    }
+
+    let n_residuals = segment_len - order;
+    let m = n_residuals as f64;
+    let mean = values.iter().sum::<f64>() / segment_len as f64;
+
+    let mut autocov = vec![0.0; order + 1];
+    for lag in 0..=order {
+        let mut sum = 0.0;
+        for t in order..segment_len {
+            let centered_now = values[t] - mean;
+            let centered_lag = values[t - lag] - mean;
+            sum += centered_now * centered_lag;
+        }
+        autocov[lag] = sum / m;
+    }
+
+    let coeffs = levinson_durbin(&autocov);
+    let intercept = mean * (1.0 - coeffs.iter().sum::<f64>());
+
+    let mut sse = 0.0;
+    for t in order..segment_len {
+        let mut pred = intercept;
+        for lag in 1..=order {
+            pred += coeffs[lag - 1] * values[t - lag];
+        }
+        let residual = values[t] - pred;
+        sse += residual * residual;
+    }
+
+    let residual_var = normalize_variance(sse / m);
+    m * residual_var.ln()
+}
+
 impl CostModel for CostAR {
     type Cache = ARCache;
 
@@ -229,12 +314,6 @@ impl CostModel for CostAR {
             return Err(CpdError::invalid_input(
                 "CostAR requires order >= 1; got order=0",
             ));
-        }
-        if self.order != 1 {
-            return Err(CpdError::not_supported(format!(
-                "CostAR currently supports order=1 only; got order={}",
-                self.order
-            )));
         }
         if x.n == 0 {
             return Err(CpdError::invalid_input("CostAR requires n >= 1; got n=0"));
@@ -268,12 +347,6 @@ impl CostModel for CostAR {
                 "CostAR requires order >= 1; got order=0",
             ));
         }
-        if self.order != 1 {
-            return Err(CpdError::not_supported(format!(
-                "CostAR currently supports order=1 only; got order={}",
-                self.order
-            )));
-        }
 
         let required_bytes = self.worst_case_cache_bytes(x);
 
@@ -294,16 +367,30 @@ impl CostModel for CostAR {
             )));
         }
 
-        let prefix_len_per_dim =
-            x.n.checked_add(1)
+        let total_series_len =
+            x.n.checked_mul(x.d)
                 .ok_or_else(|| cache_overflow_err(x.n, x.d))?;
-        let total_prefix_len = prefix_len_per_dim
-            .checked_mul(x.d)
-            .ok_or_else(|| cache_overflow_err(x.n, x.d))?;
+        let needs_ar1_prefix = self.order == 1;
+        let (prefix_len_per_dim, total_prefix_len) = if needs_ar1_prefix {
+            let prefix_len =
+                x.n.checked_add(1)
+                    .ok_or_else(|| cache_overflow_err(x.n, x.d))?;
+            let total_prefix = prefix_len
+                .checked_mul(x.d)
+                .ok_or_else(|| cache_overflow_err(x.n, x.d))?;
+            (prefix_len, total_prefix)
+        } else {
+            (0, 0)
+        };
 
         let mut prefix_sum = Vec::with_capacity(total_prefix_len);
         let mut prefix_sum_sq = Vec::with_capacity(total_prefix_len);
         let mut prefix_lag_prod = Vec::with_capacity(total_prefix_len);
+        let mut series_by_dim = if needs_ar1_prefix {
+            None
+        } else {
+            Some(Vec::with_capacity(total_series_len))
+        };
 
         for dim in 0..x.d {
             let mut series = Vec::with_capacity(x.n);
@@ -311,63 +398,79 @@ impl CostModel for CostAR {
                 series.push(read_value(x, t, dim)?);
             }
 
-            let dim_prefix_sum = if matches!(self.repro_mode, ReproMode::Strict) {
-                prefix_sums_kahan(&series)
-            } else {
-                prefix_sums(&series)
-            };
-            let dim_prefix_sum_sq = if matches!(self.repro_mode, ReproMode::Strict) {
-                prefix_sum_squares_kahan(&series)
-            } else {
-                prefix_sum_squares(&series)
-            };
+            if needs_ar1_prefix {
+                let dim_prefix_sum = if matches!(self.repro_mode, ReproMode::Strict) {
+                    prefix_sums_kahan(&series)
+                } else {
+                    prefix_sums(&series)
+                };
+                let dim_prefix_sum_sq = if matches!(self.repro_mode, ReproMode::Strict) {
+                    prefix_sum_squares_kahan(&series)
+                } else {
+                    prefix_sum_squares(&series)
+                };
 
-            let mut lag_products = Vec::with_capacity(x.n);
-            lag_products.push(0.0);
-            for t in 1..x.n {
-                lag_products.push(series[t] * series[t - 1]);
+                let mut lag_products = Vec::with_capacity(x.n);
+                lag_products.push(0.0);
+                for t in 1..x.n {
+                    lag_products.push(series[t] * series[t - 1]);
+                }
+                let dim_prefix_lag_prod = if matches!(self.repro_mode, ReproMode::Strict) {
+                    prefix_sums_kahan(&lag_products)
+                } else {
+                    prefix_sums(&lag_products)
+                };
+
+                debug_assert_eq!(dim_prefix_sum.len(), prefix_len_per_dim);
+                debug_assert_eq!(dim_prefix_sum_sq.len(), prefix_len_per_dim);
+                debug_assert_eq!(dim_prefix_lag_prod.len(), prefix_len_per_dim);
+
+                prefix_sum.extend_from_slice(&dim_prefix_sum);
+                prefix_sum_sq.extend_from_slice(&dim_prefix_sum_sq);
+                prefix_lag_prod.extend_from_slice(&dim_prefix_lag_prod);
+            } else if let Some(values) = series_by_dim.as_mut() {
+                values.extend_from_slice(&series);
             }
-            let dim_prefix_lag_prod = if matches!(self.repro_mode, ReproMode::Strict) {
-                prefix_sums_kahan(&lag_products)
-            } else {
-                prefix_sums(&lag_products)
-            };
-
-            debug_assert_eq!(dim_prefix_sum.len(), prefix_len_per_dim);
-            debug_assert_eq!(dim_prefix_sum_sq.len(), prefix_len_per_dim);
-            debug_assert_eq!(dim_prefix_lag_prod.len(), prefix_len_per_dim);
-
-            prefix_sum.extend_from_slice(&dim_prefix_sum);
-            prefix_sum_sq.extend_from_slice(&dim_prefix_sum_sq);
-            prefix_lag_prod.extend_from_slice(&dim_prefix_lag_prod);
         }
 
         Ok(ARCache {
             prefix_sum,
             prefix_sum_sq,
             prefix_lag_prod,
+            series_by_dim,
             n: x.n,
             d: x.d,
         })
     }
 
     fn worst_case_cache_bytes(&self, x: &TimeSeriesView<'_>) -> usize {
-        let prefix_len_per_dim = match x.n.checked_add(1) {
-            Some(v) => v,
-            None => return usize::MAX,
-        };
-        let total_prefix_len = match prefix_len_per_dim.checked_mul(x.d) {
-            Some(v) => v,
-            None => return usize::MAX,
-        };
-        let bytes_per_array = match total_prefix_len.checked_mul(std::mem::size_of::<f64>()) {
-            Some(v) => v,
-            None => return usize::MAX,
-        };
+        if self.order == 1 {
+            let prefix_len_per_dim = match x.n.checked_add(1) {
+                Some(v) => v,
+                None => return usize::MAX,
+            };
+            let total_prefix_len = match prefix_len_per_dim.checked_mul(x.d) {
+                Some(v) => v,
+                None => return usize::MAX,
+            };
+            let bytes_per_array = match total_prefix_len.checked_mul(std::mem::size_of::<f64>()) {
+                Some(v) => v,
+                None => return usize::MAX,
+            };
 
-        match bytes_per_array.checked_mul(3) {
-            Some(v) => v,
-            None => usize::MAX,
+            match bytes_per_array.checked_mul(3) {
+                Some(v) => v,
+                None => usize::MAX,
+            }
+        } else {
+            let total_series_len = match x.n.checked_mul(x.d) {
+                Some(v) => v,
+                None => return usize::MAX,
+            };
+            match total_series_len.checked_mul(std::mem::size_of::<f64>()) {
+                Some(v) => v,
+                None => usize::MAX,
+            }
         }
     }
 
@@ -390,31 +493,43 @@ impl CostModel for CostAR {
         if segment_len <= self.order.saturating_add(1) {
             return 0.0;
         }
-        assert_eq!(
-            self.order, 1,
-            "CostAR currently supports order=1 only; got order={}",
-            self.order
-        );
+        if self.order == 1 {
+            let n_residuals = (segment_len - self.order) as f64;
+            let mut total = 0.0;
 
-        let n_residuals = (segment_len - self.order) as f64;
+            for dim in 0..cache.d {
+                let base = cache.dim_offset(dim);
+                let sum_y =
+                    cache.prefix_sum[base + end] - cache.prefix_sum[base + start + self.order];
+                let sum_y_sq = cache.prefix_sum_sq[base + end]
+                    - cache.prefix_sum_sq[base + start + self.order];
+
+                let lag_end = end - self.order;
+                let sum_x = cache.prefix_sum[base + lag_end] - cache.prefix_sum[base + start];
+                let sum_x_sq =
+                    cache.prefix_sum_sq[base + lag_end] - cache.prefix_sum_sq[base + start];
+
+                let sum_xy = cache.prefix_lag_prod[base + end]
+                    - cache.prefix_lag_prod[base + start + self.order];
+
+                let sse = ar1_residual_sse(sum_x, sum_x_sq, sum_y, sum_y_sq, sum_xy, n_residuals);
+                let residual_var = normalize_variance(sse / n_residuals);
+                total += n_residuals * residual_var.ln();
+            }
+
+            return total;
+        }
+
+        let series_by_dim = cache
+            .series_by_dim
+            .as_ref()
+            .expect("CostAR cache missing per-dimension series for order>1");
+
         let mut total = 0.0;
-
         for dim in 0..cache.d {
-            let base = cache.dim_offset(dim);
-            let sum_y = cache.prefix_sum[base + end] - cache.prefix_sum[base + start + self.order];
-            let sum_y_sq =
-                cache.prefix_sum_sq[base + end] - cache.prefix_sum_sq[base + start + self.order];
-
-            let lag_end = end - self.order;
-            let sum_x = cache.prefix_sum[base + lag_end] - cache.prefix_sum[base + start];
-            let sum_x_sq = cache.prefix_sum_sq[base + lag_end] - cache.prefix_sum_sq[base + start];
-
-            let sum_xy = cache.prefix_lag_prod[base + end]
-                - cache.prefix_lag_prod[base + start + self.order];
-
-            let sse = ar1_residual_sse(sum_x, sum_x_sq, sum_y, sum_y_sq, sum_xy, n_residuals);
-            let residual_var = normalize_variance(sse / n_residuals);
-            total += n_residuals * residual_var.ln();
+            let base = cache.series_offset(dim);
+            let segment = &series_by_dim[base + start..base + end];
+            total += arp_segment_cost(segment, self.order);
         }
 
         total
@@ -507,6 +622,50 @@ mod tests {
         m * var.ln()
     }
 
+    fn naive_arp_yule_walker_univariate(
+        values: &[f64],
+        start: usize,
+        end: usize,
+        order: usize,
+    ) -> f64 {
+        let segment_len = end - start;
+        if segment_len <= order.saturating_add(1) {
+            return 0.0;
+        }
+
+        let n_residuals = segment_len - order;
+        let segment = &values[start..end];
+        let mean = segment.iter().sum::<f64>() / segment_len as f64;
+        let m = n_residuals as f64;
+
+        let mut autocov = vec![0.0; order + 1];
+        for lag in 0..=order {
+            let mut sum = 0.0;
+            for t in order..segment_len {
+                let centered_now = segment[t] - mean;
+                let centered_lag = segment[t - lag] - mean;
+                sum += centered_now * centered_lag;
+            }
+            autocov[lag] = sum / m;
+        }
+
+        let coeffs = super::levinson_durbin(&autocov);
+        let intercept = mean * (1.0 - coeffs.iter().sum::<f64>());
+        let mut sse = 0.0;
+
+        for t in order..segment_len {
+            let mut pred = intercept;
+            for lag in 1..=order {
+                pred += coeffs[lag - 1] * segment[t - lag];
+            }
+            let residual = segment[t] - pred;
+            sse += residual * residual;
+        }
+
+        let var = normalize_variance(sse / m);
+        m * var.ln()
+    }
+
     fn synthetic_univariate_values(n: usize, breakpoint: usize) -> Vec<f64> {
         let phi = 0.8;
         let mut values = Vec::with_capacity(n);
@@ -516,6 +675,22 @@ mod tests {
             let prev = values[t - 1];
             let eps = 0.15 * (0.17 * t as f64).sin();
             values.push(mu + phi * (prev - mu) + eps);
+        }
+        values
+    }
+
+    fn synthetic_ar2_values(n: usize, breakpoint: usize) -> Vec<f64> {
+        let phi1 = 0.55;
+        let phi2 = 0.25;
+        let mut values = Vec::with_capacity(n);
+        values.push(0.0);
+        values.push(0.0);
+
+        for t in 2..n {
+            let mu = if t < breakpoint { -1.0 } else { 3.5 };
+            let eps = 0.11 * (0.19 * t as f64).sin() + 0.03 * (0.07 * t as f64).cos();
+            let value = mu + phi1 * (values[t - 1] - mu) + phi2 * (values[t - 2] - mu) + eps;
+            values.push(value);
         }
         values
     }
@@ -644,10 +819,13 @@ mod tests {
         assert_eq!(model.penalty_params_per_segment(), 3);
         assert_eq!(model.missing_support(), MissingSupport::Reject);
         assert!(!model.supports_approx_cache());
+
+        let ar2 = CostAR::new(2, ReproMode::Balanced);
+        assert_eq!(ar2.penalty_params_per_segment(), 4);
     }
 
     #[test]
-    fn validate_rejects_invalid_order_and_missing_values() {
+    fn validate_rejects_zero_order_and_missing_values() {
         let values = [1.0, 2.0, 3.0, 4.0];
         let clean = make_f64_view(
             &values,
@@ -663,17 +841,13 @@ mod tests {
         assert!(matches!(zero_order, CpdError::InvalidInput(_)));
         assert!(zero_order.to_string().contains("order >= 1"));
 
-        let ar2 = CostAR::new(2, ReproMode::Balanced)
+        CostAR::new(2, ReproMode::Balanced)
             .validate(&clean)
-            .expect_err("order=2 should fail");
-        assert!(matches!(ar2, CpdError::NotSupported(_)));
-        assert!(ar2.to_string().contains("order=1 only"));
+            .expect("order=2 should be supported");
 
-        let ar2_precompute = CostAR::new(2, ReproMode::Balanced)
+        CostAR::new(2, ReproMode::Balanced)
             .precompute(&clean, &CachePolicy::Full)
-            .expect_err("precompute should also reject unsupported orders");
-        assert!(matches!(ar2_precompute, CpdError::NotSupported(_)));
-        assert!(ar2_precompute.to_string().contains("order=1 only"));
+            .expect("precompute should support order=2");
 
         let with_missing = [1.0, f64::NAN, 3.0, 4.0];
         let missing_view = make_f64_view(
@@ -746,6 +920,38 @@ mod tests {
             let fast = model.segment_cost(&cache, start, end);
             let naive = naive_ar1_univariate(&values, start, end);
             assert_close(fast, naive, 1e-6);
+        }
+    }
+
+    #[test]
+    fn segment_cost_order2_matches_naive_on_deterministic_queries() {
+        let model = CostAR::new(2, ReproMode::Balanced);
+        let n = 260;
+        let values = synthetic_ar2_values(n, 130);
+        let view = make_f64_view(
+            &values,
+            n,
+            1,
+            MemoryLayout::CContiguous,
+            MissingPolicy::Error,
+        );
+        let cache = model
+            .precompute(&view, &CachePolicy::Full)
+            .expect("precompute should succeed");
+
+        let mut state = 0x8b13_55af_09ee_44d1_u64;
+        for _ in 0..500 {
+            let a = (lcg_next(&mut state) as usize) % n;
+            let b = (lcg_next(&mut state) as usize) % n;
+            let start = a.min(b);
+            let mut end = a.max(b) + 1;
+            if start == end {
+                end = (start + 1).min(n);
+            }
+
+            let fast = model.segment_cost(&cache, start, end);
+            let naive = naive_arp_yule_walker_univariate(&values, start, end, 2);
+            assert_close(fast, naive, 1e-5);
         }
     }
 
@@ -850,8 +1056,93 @@ mod tests {
     }
 
     #[test]
+    fn order2_layout_coverage_c_f_and_strided() {
+        let model = CostAR::new(2, ReproMode::Balanced);
+        let start = 2;
+        let end = 6;
+
+        let c_values = vec![
+            1.0, 11.0, 1.5, 11.5, 2.0, 12.0, 2.5, 12.5, 3.0, 13.0, 3.5, 13.5,
+        ];
+        let c_view = make_f64_view(
+            &c_values,
+            6,
+            2,
+            MemoryLayout::CContiguous,
+            MissingPolicy::Error,
+        );
+        let c_cache = model
+            .precompute(&c_view, &CachePolicy::Full)
+            .expect("C precompute should succeed");
+        let c_cost = model.segment_cost(&c_cache, start, end);
+
+        let f_values = vec![
+            1.0, 1.5, 2.0, 2.5, 3.0, 3.5, // dim 0
+            11.0, 11.5, 12.0, 12.5, 13.0, 13.5, // dim 1
+        ];
+        let f_view = make_f64_view(
+            &f_values,
+            6,
+            2,
+            MemoryLayout::FContiguous,
+            MissingPolicy::Error,
+        );
+        let f_cache = model
+            .precompute(&f_view, &CachePolicy::Full)
+            .expect("F precompute should succeed");
+        let f_cost = model.segment_cost(&f_cache, start, end);
+        assert_close(f_cost, c_cost, 1e-12);
+
+        let s_values = vec![
+            1.0, 1.5, 2.0, 2.5, 3.0, 3.5, // dim 0
+            11.0, 11.5, 12.0, 12.5, 13.0, 13.5, // dim 1
+        ];
+        let s_view = make_f64_view(
+            &s_values,
+            6,
+            2,
+            MemoryLayout::Strided {
+                row_stride: 1,
+                col_stride: 6,
+            },
+            MissingPolicy::Error,
+        );
+        let s_cache = model
+            .precompute(&s_view, &CachePolicy::Full)
+            .expect("strided precompute should succeed");
+        let s_cost = model.segment_cost(&s_cache, start, end);
+        assert_close(s_cost, c_cost, 1e-12);
+    }
+
+    #[test]
     fn precompute_respects_budget() {
         let model = CostAR::default();
+        let values = synthetic_multivariate_values(16, 3);
+        let view = make_f64_view(
+            &values,
+            16,
+            3,
+            MemoryLayout::CContiguous,
+            MissingPolicy::Error,
+        );
+
+        let required = model.worst_case_cache_bytes(&view);
+        let tiny_budget = required.saturating_sub(1);
+        let err = model
+            .precompute(
+                &view,
+                &CachePolicy::Budgeted {
+                    max_bytes: tiny_budget,
+                },
+            )
+            .expect_err("insufficient budget should fail");
+        assert!(matches!(err, CpdError::ResourceLimit(_)));
+        assert!(err.to_string().contains("exceeds budget"));
+    }
+
+    #[test]
+    fn precompute_respects_budget_for_order2() {
+        let model = CostAR::new(2, ReproMode::Balanced);
         let values = synthetic_multivariate_values(16, 3);
         let view = make_f64_view(
             &values,
@@ -915,6 +1206,12 @@ mod tests {
             .expect("precompute should succeed");
         assert_eq!(model.segment_cost(&cache, 0, 1), 0.0);
         assert_eq!(model.segment_cost(&cache, 1, 3), 0.0);
+
+        let ar2 = CostAR::new(2, ReproMode::Balanced);
+        let ar2_cache = ar2
+            .precompute(&view, &CachePolicy::Full)
+            .expect("AR(2) precompute should succeed");
+        assert_eq!(ar2.segment_cost(&ar2_cache, 0, 3), 0.0);
     }
 
     #[test]
@@ -971,6 +1268,7 @@ mod tests {
             prefix_sum: cache.prefix_sum.clone(),
             prefix_sum_sq: cache.prefix_sum_sq.clone(),
             prefix_lag_prod: cache.prefix_lag_prod.clone(),
+            series_by_dim: cache.series_by_dim.clone(),
             n: cache.n,
             d: cache.d,
         };

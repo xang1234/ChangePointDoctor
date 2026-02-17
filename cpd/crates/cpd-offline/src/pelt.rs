@@ -976,6 +976,20 @@ mod tests {
         values
     }
 
+    fn ar2_mean_shift_signal(n: usize, breakpoint: usize) -> Vec<f64> {
+        let phi1 = 0.55;
+        let phi2 = 0.25;
+        let mut values = Vec::with_capacity(n);
+        values.push(0.0);
+        values.push(0.0);
+        for t in 2..n {
+            let mu = if t < breakpoint { -1.0 } else { 4.0 };
+            let eps = 0.18 * (0.13 * t as f64).sin() + 0.04 * (0.05 * t as f64).cos();
+            values.push(mu + phi1 * (values[t - 1] - mu) + phi2 * (values[t - 2] - mu) + eps);
+        }
+        values
+    }
+
     #[test]
     fn config_defaults_and_validation() {
         let default_cfg = PeltConfig::default();
@@ -1155,6 +1169,45 @@ mod tests {
         let detected = result.change_points[0];
         assert!(
             detected.abs_diff(breakpoint) <= 8,
+            "expected change point near {breakpoint}, got {detected}"
+        );
+        assert_eq!(result.breakpoints.last().copied(), Some(n));
+    }
+
+    #[test]
+    fn ar2_cost_detects_mean_shift_under_autocorrelation() {
+        let detector = Pelt::new(
+            CostAR::new(2, ReproMode::Balanced),
+            PeltConfig {
+                stopping: Stopping::KnownK(1),
+                params_per_segment: 4,
+                cancel_check_every: 8,
+            },
+        )
+        .expect("config should be valid");
+
+        let n = 260;
+        let breakpoint = 130;
+        let values = ar2_mean_shift_signal(n, breakpoint);
+        let view = make_f64_view(
+            &values,
+            values.len(),
+            1,
+            MemoryLayout::CContiguous,
+            MissingPolicy::Error,
+        );
+
+        let constraints = Constraints {
+            min_segment_len: 24,
+            max_change_points: Some(1),
+            ..Constraints::default()
+        };
+        let ctx = ExecutionContext::new(&constraints);
+        let result = detector.detect(&view, &ctx).expect("detect should succeed");
+        assert_eq!(result.change_points.len(), 1);
+        let detected = result.change_points[0];
+        assert!(
+            detected.abs_diff(breakpoint) <= 10,
             "expected change point near {breakpoint}, got {detected}"
         );
         assert_eq!(result.breakpoints.last().copied(), Some(n));
@@ -1736,6 +1789,44 @@ mod tests {
                 .notes
                 .iter()
                 .any(|note| note.contains("params_per_segment=5 (config_override)"))
+        );
+    }
+
+    #[test]
+    fn bic_uses_order_aware_model_default_params_for_ar2() {
+        let n = 220;
+        let breakpoint = 110;
+        let values = ar2_mean_shift_signal(n, breakpoint);
+        let view = make_f64_view(
+            &values,
+            values.len(),
+            1,
+            MemoryLayout::CContiguous,
+            MissingPolicy::Error,
+        );
+        let constraints = Constraints {
+            min_segment_len: 24,
+            max_change_points: Some(1),
+            ..Constraints::default()
+        };
+        let ctx = ExecutionContext::new(&constraints);
+
+        let detector = Pelt::new(
+            CostAR::new(2, ReproMode::Balanced),
+            PeltConfig {
+                stopping: Stopping::Penalized(Penalty::BIC),
+                params_per_segment: 2,
+                cancel_check_every: 8,
+            },
+        )
+        .expect("config should be valid");
+        let result = detector.detect(&view, &ctx).expect("ar2+BIC should detect");
+        assert!(
+            result
+                .diagnostics
+                .notes
+                .iter()
+                .any(|note| note.contains("params_per_segment=4 (model_default)"))
         );
     }
 
