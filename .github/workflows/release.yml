@@ -257,11 +257,11 @@ jobs:
       - name: Generate Rust SBOM
         run: |
           mkdir -p release-artifacts/sbom
-          if cargo cyclonedx --manifest-path cpd/Cargo.toml --workspace --format json --output-file release-artifacts/sbom/sbom-rust-workspace.cdx.json; then
+          if cargo cyclonedx --manifest-path cpd/Cargo.toml --all --format json --output-file release-artifacts/sbom/sbom-rust-workspace.cdx.json; then
             echo "Generated Rust SBOM at release-artifacts/sbom/sbom-rust-workspace.cdx.json"
           else
             echo "Primary cargo cyclonedx invocation failed; retrying with default output."
-            cargo cyclonedx --manifest-path cpd/Cargo.toml --workspace --format json
+            cargo cyclonedx --manifest-path cpd/Cargo.toml --all --format json
             CANDIDATE="$(find cpd -type f \( -name '*.cdx.json' -o -name 'bom.json' \) | head -n 1)"
             if [[ -z "${CANDIDATE}" ]]; then
               echo "Unable to locate CycloneDX output" >&2
