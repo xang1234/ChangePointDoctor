@@ -69,10 +69,10 @@ Python high-level classes include `cpd.Pelt`, `cpd.Binseg`, `cpd.Fpop`, `cpd.Boc
 
 ## Learn more (Python first)
 
-- [Notebook quickstarts](/Users/admin/Documents/Work/claude-doctor-changepoint/cpd/python/examples/notebooks/README.md)
-- [Python quickstart](/Users/admin/Documents/Work/claude-doctor-changepoint/cpd/python/QUICKSTART.md)
-- [Python bindings README](/Users/admin/Documents/Work/claude-doctor-changepoint/cpd/python/README.md)
-- [Reproducibility modes](/Users/admin/Documents/Work/claude-doctor-changepoint/cpd/docs/reproducibility_modes.md)
+- [Notebook quickstarts](cpd/python/examples/notebooks/README.md)
+- [Python quickstart](cpd/python/QUICKSTART.md)
+- [Python bindings README](cpd/python/README.md)
+- [Reproducibility modes](cpd/docs/reproducibility_modes.md)
 
 ## The changepoint doctor function
 
