@@ -1,24 +1,28 @@
 # v1 Multivariate Semantics and Scaling
 
-This note documents how v1 cost models behave for `d > 1`, how cache memory scales with dimension, and how to benchmark `d=8` and `d=16`.
+This note documents multivariate (`d > 1`) behavior for v1 costs, including diagonal vs full-covariance Normal options.
 
 ## Multivariate Semantics
 
-All current v1 costs use additive per-dimension scoring:
+Additive (independent-dimension) costs:
 
 - `CostL2Mean`: sum of per-dimension SSE terms.
-- `CostNormalMeanVar`: sum of per-dimension Gaussian negative log-likelihood terms.
-- `CostNIGMarginal`: sum of per-dimension NIG log-marginal terms.
+- `CostNormalMeanVar`: sum of per-dimension Gaussian negative log-likelihood terms (diagonal covariance).
+- `CostNIGMarginal`: sum of per-dimension NIG log-marginal terms (diagonal covariance).
 - `CostPoissonRate`: sum of per-dimension Poisson rate log-likelihood terms.
 - `CostBernoulli`: sum of per-dimension Bernoulli log-likelihood terms.
 - `CostLinear`: sum of per-dimension piecewise-linear residual terms.
 - `CostAR`: sum of per-dimension AR residual likelihood terms.
 
-Implication:
+Cross-dimension covariance-aware cost:
 
-- Cross-dimension covariance is not modeled in v1 costs.
-- For `CostNormalMeanVar` and `CostNIGMarginal`, this corresponds to a diagonal-covariance assumption.
-- A full-covariance Normal cost remains future work (stretch goal from `CPD-xb5.14`).
+- `CostNormalFullCov`: multivariate Gaussian segment cost using a regularized full covariance estimate per segment.
+
+## Choosing Diagonal vs Full Covariance
+
+- Prefer `CostNormalMeanVar` (diagonal) when `d` is large, runtime/memory budget is tight, or cross-dimension covariance is weak/noisy.
+- Prefer `CostNormalFullCov` when covariance structure between dimensions carries changepoint signal and `d` is moderate.
+- `CostNormalFullCov` uses ridge regularization plus jitter escalation in Cholesky factorization to keep segment costs finite for near-singular segments (`m <= d`, collinearity).
 
 ## Cache Memory Scaling
 
@@ -27,14 +31,16 @@ Let:
 - `n`: number of rows
 - `d`: number of dimensions
 - `P = (n + 1) * d`
+- `T = d * (d + 1) / 2` (upper-triangle pair count)
 - `F = sizeof(f64)`
 - `U = sizeof(u64)`
 - `Z = sizeof(usize)`
 
-Worst-case cache bytes in current v1 implementations:
+Worst-case cache bytes:
 
 - `CostL2Mean`: `2 * P * F`
 - `CostNormalMeanVar`: `2 * P * F`
+- `CostNormalFullCov`: `(n + 1) * (d + T) * F`
 - `CostNIGMarginal`: `P * U + 2 * P * F`
 - `CostPoissonRate`: `P * F`
 - `CostBernoulli`: `P * Z`
@@ -42,42 +48,43 @@ Worst-case cache bytes in current v1 implementations:
 - `CostAR (order=1)`: `3 * P * F`
 - `CostAR (order>1)`: `n * d * F`
 
-All of the above are `O(n * d)` in space.
+Asymptotically:
+
+- Diagonal/additive costs are `O(n * d)` space.
+- `CostNormalFullCov` is `O(n * d^2)` space.
+
+## Time Scaling (Segment Query)
+
+- `CostNormalMeanVar`: `O(d)` per segment query.
+- `CostNormalFullCov`: `O(d^2)` covariance assembly + `O(d^3)` Cholesky log-det per segment query.
 
 ## Verification Coverage
 
-`cpd-costs` now includes a cross-model integration test at:
-
-- `cpd/crates/cpd-costs/tests/multivariate_v1.rs`
-
-This verifies additive multivariate behavior at `d=8` and `d=16` for all v1 costs listed above.
+- Additive cross-model checks (`d=8`, `d=16`) live in `cpd/crates/cpd-costs/tests/multivariate_v1.rs`.
+- `CostNormalFullCov` correctness/stability coverage lives in `cpd/crates/cpd-costs/src/normal.rs` tests.
 
 ## Performance Benchmarks (`d=8`, `d=16`)
 
-Use the Criterion harness in:
+Criterion harness:
 
 - `cpd/crates/cpd-bench/benches/cost_multivariate.rs`
 
-Run the full matrix:
+Run full matrix:
 
 ```bash
 cargo bench -p cpd-bench --bench cost_multivariate
 ```
 
-Run a single benchmark id (short id or `group/id`) using `CPD_BENCH_EXACT`:
+Run one benchmark id:
 
 ```bash
-CPD_BENCH_EXACT=normal_segment_cost_n5e4_d16 \
+CPD_BENCH_EXACT=normal_full_cov_segment_cost_n5e4_d16 \
   cargo bench -p cpd-bench --bench cost_multivariate
 ```
 
-The benchmark includes `d in {1, 8, 16}` for:
-
-- `l2`, `normal`, `nig`, `poisson`, `bernoulli`, `linear`, `ar`
+Included families use `d in {1, 8, 16}` and include `normal_full_cov`.
 
 ## Doctor Awareness
 
-Doctor awareness:
-
-- Offline recommendations explain additive/diagonal semantics for the selected cost.
+- Offline recommendations emit multivariate semantics guidance for selected cost models, including diagonal-vs-full-covariance tradeoffs for Normal costs.
 - Online recommendations are rejected for multivariate inputs (`d>1`) with a clear guidance error.

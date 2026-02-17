@@ -20,7 +20,7 @@ pub use l2::{CostL2Mean, L2Cache};
 pub use linear::{CostLinear, LinearCache};
 pub use model::{CachedCost, CostModel};
 pub use nig::{CostNIGMarginal, NIGCache, NIGPrior};
-pub use normal::{CostNormalMeanVar, NormalCache};
+pub use normal::{CostNormalFullCov, CostNormalMeanVar, NormalCache, NormalFullCovCache};
 pub use poisson::{CostPoissonRate, PoissonCache};
 
 /// Built-in cost model namespace placeholder.

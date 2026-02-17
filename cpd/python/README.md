@@ -139,6 +139,7 @@ BIC/AIC complexity terms are model-aware by default:
 
 - `l2` uses `params_per_segment=2` (mean + residual variance proxy)
 - `normal` uses `params_per_segment=3` (mean + variance + residual term)
+- `normal_full_cov` currently uses `params_per_segment=3` for penalty scaling (full-covariance model complexity grows with `d`; manual penalty tuning may be preferred for large `d`)
 
 Advanced users can still override `params_per_segment` in low-level pipeline detector config.
 
@@ -245,10 +246,10 @@ to verify architecture and run the CI-aligned local sanity flow.
 
 ## API Reference Outline
 
-- `Pelt(model="l2"|"normal", min_segment_len, jump, max_change_points)`
+- `Pelt(model="l2"|"normal"|"normal_full_cov", min_segment_len, jump, max_change_points)`
   - `.fit(x)` -> detector
   - `.predict(pen=..., n_bkps=...)` -> `OfflineChangePointResult`
-- `Binseg(model="l2"|"normal", min_segment_len, jump, max_change_points, max_depth)`
+- `Binseg(model="l2"|"normal"|"normal_full_cov", min_segment_len, jump, max_change_points, max_depth)`
   - `.fit(x)` -> detector
   - `.predict(pen=..., n_bkps=...)` -> `OfflineChangePointResult`
 - `Fpop(min_segment_len, jump, max_change_points)` (`l2` only)
@@ -256,6 +257,7 @@ to verify architecture and run the CI-aligned local sanity flow.
   - `.predict(pen=..., n_bkps=...)` -> `OfflineChangePointResult`
 - `detect_offline(x, pipeline=None, detector, cost, constraints, stopping, preprocess, repro_mode, return_diagnostics)`
   - `detector` accepts `pelt`, `binseg`, or `fpop` (`fpop` requires `cost="l2"`).
+  - `cost` accepts `l1_median`, `l2`, `normal`, `normal_full_cov`, and (pipeline-only) `nig`.
   - `pipeline` accepts both simplified Python dicts (for example `{"detector": {"kind": "pelt"}}`) and Rust `PipelineSpec` serde shape (for example `{"detector": {"Offline": {"Pelt": {...}}}, ...}`).
 - `OfflineChangePointResult`
   - fields: `breakpoints`, `change_points`, `scores`, `segments`, `diagnostics`

@@ -9,6 +9,8 @@ use cpd_core::{
 };
 
 const VAR_FLOOR: f64 = f64::EPSILON * 1e6;
+const FULL_COV_RIDGE_RELATIVE: f64 = 1.0e-6;
+const FULL_COV_MAX_JITTER_TRIALS: usize = 8;
 
 /// Gaussian segment cost model with MLE mean and variance.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -44,6 +46,48 @@ impl NormalCache {
 
     fn dim_offset(&self, dim: usize) -> usize {
         dim * self.prefix_len_per_dim()
+    }
+}
+
+/// Gaussian segment cost model using a full covariance estimate for `d > 1`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CostNormalFullCov {
+    pub repro_mode: ReproMode,
+}
+
+impl CostNormalFullCov {
+    pub const fn new(repro_mode: ReproMode) -> Self {
+        Self { repro_mode }
+    }
+}
+
+impl Default for CostNormalFullCov {
+    fn default() -> Self {
+        Self::new(ReproMode::Balanced)
+    }
+}
+
+/// Prefix-stat cache for full-covariance Normal segment-cost queries.
+#[derive(Clone, Debug, PartialEq)]
+pub struct NormalFullCovCache {
+    prefix_sum: Vec<f64>,
+    prefix_cross: Vec<f64>,
+    n: usize,
+    d: usize,
+}
+
+impl NormalFullCovCache {
+    fn prefix_len_per_dim(&self) -> usize {
+        self.n + 1
+    }
+
+    fn dim_offset(&self, dim: usize) -> usize {
+        dim * self.prefix_len_per_dim()
+    }
+
+    fn pair_offset(&self, i: usize, j: usize) -> usize {
+        let pair = upper_triangular_index(self.d, i, j);
+        pair * self.prefix_len_per_dim()
     }
 }
 
@@ -172,6 +216,132 @@ fn normalize_variance(raw_var: f64) -> f64 {
     } else {
         raw_var
     }
+}
+
+fn triangular_pair_count(d: usize) -> Option<usize> {
+    d.checked_mul(d.checked_add(1)?)?.checked_div(2)
+}
+
+fn upper_triangular_index(d: usize, i: usize, j: usize) -> usize {
+    debug_assert!(i < d);
+    debug_assert!(j < d);
+    debug_assert!(i <= j);
+    let row_prefix = i
+        .checked_mul(d)
+        .and_then(|left| {
+            i.checked_mul(i.saturating_sub(1))
+                .and_then(|value| value.checked_div(2))
+                .and_then(|tri| left.checked_sub(tri))
+        })
+        .expect("upper-triangle index should fit usize");
+    row_prefix
+        .checked_add(j - i)
+        .expect("upper-triangle index should fit usize")
+}
+
+fn normalize_covariance_entry(raw: f64) -> f64 {
+    if raw.is_nan() {
+        0.0
+    } else if raw == f64::INFINITY {
+        f64::MAX
+    } else if raw == f64::NEG_INFINITY {
+        -f64::MAX
+    } else {
+        raw
+    }
+}
+
+fn full_cov_ridge(trace: f64, d: usize, segment_len: f64) -> f64 {
+    let mean_var = normalize_variance(trace / d as f64);
+    let mut ridge = (mean_var * FULL_COV_RIDGE_RELATIVE).max(VAR_FLOOR);
+    if segment_len < d as f64 {
+        ridge *= 1.0 + (d as f64 - segment_len) / d as f64;
+    }
+    if ridge.is_finite() { ridge } else { f64::MAX }
+}
+
+fn cholesky_logdet_in_place(matrix: &mut [f64], d: usize) -> Option<f64> {
+    for i in 0..d {
+        for j in 0..=i {
+            let mut sum = matrix[i * d + j];
+            for k in 0..j {
+                sum -= matrix[i * d + k] * matrix[j * d + k];
+            }
+
+            if i == j {
+                if !sum.is_finite() || sum <= VAR_FLOOR {
+                    return None;
+                }
+                matrix[i * d + i] = sum.sqrt();
+            } else {
+                let diag = matrix[j * d + j];
+                if !diag.is_finite() || diag <= VAR_FLOOR {
+                    return None;
+                }
+                let value = sum / diag;
+                if !value.is_finite() {
+                    return None;
+                }
+                matrix[i * d + j] = value;
+            }
+        }
+    }
+
+    let mut log_det = 0.0;
+    for i in 0..d {
+        let diag = matrix[i * d + i];
+        if !diag.is_finite() || diag <= 0.0 {
+            return None;
+        }
+        log_det += 2.0 * diag.ln();
+    }
+
+    if log_det.is_finite() {
+        Some(log_det)
+    } else {
+        None
+    }
+}
+
+fn regularized_logdet(covariance: &[f64], d: usize, base_ridge: f64) -> f64 {
+    let mut scale = base_ridge.max(VAR_FLOOR);
+    for value in covariance {
+        let abs = value.abs();
+        if abs.is_finite() && abs > scale {
+            scale = abs;
+        }
+    }
+    if !scale.is_finite() || scale <= 0.0 {
+        scale = 1.0;
+    }
+
+    let inv_scale = 1.0 / scale;
+    let mut scaled = vec![0.0; d * d];
+    for (idx, value) in covariance.iter().copied().enumerate() {
+        let normalized = normalize_covariance_entry(value * inv_scale);
+        scaled[idx] = if normalized.is_finite() {
+            normalized
+        } else if normalized.is_sign_positive() {
+            f64::MAX
+        } else {
+            -f64::MAX
+        };
+    }
+
+    let mut jitter = base_ridge.max(VAR_FLOOR);
+    for _ in 0..FULL_COV_MAX_JITTER_TRIALS {
+        let mut attempt = scaled.clone();
+        let scaled_jitter = (jitter * inv_scale).max(VAR_FLOOR);
+        for i in 0..d {
+            attempt[i * d + i] = normalize_covariance_entry(attempt[i * d + i] + scaled_jitter);
+        }
+        if let Some(log_det_scaled) = cholesky_logdet_in_place(&mut attempt, d) {
+            return d as f64 * scale.ln() + log_det_scaled;
+        }
+        jitter *= 10.0;
+    }
+
+    d as f64 * normalize_variance(jitter).ln()
 }
 
 impl CostModel for CostNormalMeanVar {
@@ -334,11 +504,228 @@ impl CostModel for CostNormalMeanVar {
     }
 }
 
+impl CostModel for CostNormalFullCov {
+    type Cache = NormalFullCovCache;
+
+    fn name(&self) -> &'static str {
+        "normal_full_cov"
+    }
+
+    fn penalty_params_per_segment(&self) -> usize {
+        3
+    }
+
+    fn validate(&self, x: &TimeSeriesView<'_>) -> Result<(), CpdError> {
+        if x.n == 0 {
+            return Err(CpdError::invalid_input(
+                "CostNormalFullCov requires n >= 1; got n=0",
+            ));
+        }
+        if x.d == 0 {
+            return Err(CpdError::invalid_input(
+                "CostNormalFullCov requires d >= 1; got d=0",
+            ));
+        }
+        if x.has_missing() {
+            return Err(CpdError::invalid_input(format!(
+                "CostNormalFullCov does not support missing values: effective_missing_count={}",
+                x.n_missing()
+            )));
+        }
+
+        match x.values {
+            DTypeView::F32(_) | DTypeView::F64(_) => Ok(()),
+        }
+    }
+
+    fn missing_support(&self) -> MissingSupport {
+        MissingSupport::Reject
+    }
+
+    fn precompute(
+        &self,
+        x: &TimeSeriesView<'_>,
+        policy: &CachePolicy,
+    ) -> Result<Self::Cache, CpdError> {
+        let required_bytes = self.worst_case_cache_bytes(x);
+
+        if matches!(policy, CachePolicy::Approximate { .. }) {
+            return Err(CpdError::not_supported(
+                "CostNormalFullCov does not support CachePolicy::Approximate",
+            ));
+        }
+        if required_bytes == usize::MAX {
+            return Err(CpdError::resource_limit(format!(
+                "cache size overflow while planning NormalFullCovCache for n={}, d={}",
+                x.n, x.d
+            )));
+        }
+        if let CachePolicy::Budgeted { max_bytes } = policy
+            && required_bytes > *max_bytes
+        {
+            return Err(CpdError::resource_limit(format!(
+                "CostNormalFullCov cache requires {} bytes, exceeds budget {} bytes",
+                required_bytes, max_bytes
+            )));
+        }
+
+        let prefix_len_per_dim =
+            x.n.checked_add(1)
+                .ok_or_else(|| CpdError::resource_limit("n+1 overflow for full-cov cache"))?;
+        let sum_prefix_len = prefix_len_per_dim
+            .checked_mul(x.d)
+            .ok_or_else(|| CpdError::resource_limit("sum-prefix overflow for full-cov cache"))?;
+        let pair_count = triangular_pair_count(x.d)
+            .ok_or_else(|| CpdError::resource_limit("pair-count overflow for full-cov cache"))?;
+        let cross_prefix_len = prefix_len_per_dim
+            .checked_mul(pair_count)
+            .ok_or_else(|| CpdError::resource_limit("cross-prefix overflow for full-cov cache"))?;
+
+        let mut values_by_dim = Vec::with_capacity(
+            x.n.checked_mul(x.d)
+                .ok_or_else(|| CpdError::resource_limit("n*d overflow for full-cov values"))?,
+        );
+        for dim in 0..x.d {
+            for t in 0..x.n {
+                values_by_dim.push(read_value(x, t, dim)?);
+            }
+        }
+
+        let mut prefix_sum = Vec::with_capacity(sum_prefix_len);
+        for dim in 0..x.d {
+            let start = dim * x.n;
+            let end = start + x.n;
+            let series = &values_by_dim[start..end];
+            let prefix = if matches!(self.repro_mode, ReproMode::Strict) {
+                prefix_sums_kahan(series)
+            } else {
+                prefix_sums(series)
+            };
+            debug_assert_eq!(prefix.len(), prefix_len_per_dim);
+            prefix_sum.extend_from_slice(&prefix);
+        }
+
+        let mut prefix_cross = Vec::with_capacity(cross_prefix_len);
+        let mut cross_series = Vec::with_capacity(x.n);
+        for i in 0..x.d {
+            let i_base = i * x.n;
+            for j in i..x.d {
+                let j_base = j * x.n;
+                cross_series.clear();
+                for t in 0..x.n {
+                    cross_series.push(values_by_dim[i_base + t] * values_by_dim[j_base + t]);
+                }
+                let prefix = if matches!(self.repro_mode, ReproMode::Strict) {
+                    prefix_sums_kahan(&cross_series)
+                } else {
+                    prefix_sums(&cross_series)
+                };
+                debug_assert_eq!(prefix.len(), prefix_len_per_dim);
+                prefix_cross.extend_from_slice(&prefix);
+            }
+        }
+
+        Ok(NormalFullCovCache {
+            prefix_sum,
+            prefix_cross,
+            n: x.n,
+            d: x.d,
+        })
+    }
+
+    fn worst_case_cache_bytes(&self, x: &TimeSeriesView<'_>) -> usize {
+        let prefix_len_per_dim = match x.n.checked_add(1) {
+            Some(value) => value,
+            None => return usize::MAX,
+        };
+        let pair_count = match triangular_pair_count(x.d) {
+            Some(value) => value,
+            None => return usize::MAX,
+        };
+        let sum_len = match prefix_len_per_dim.checked_mul(x.d) {
+            Some(value) => value,
+            None => return usize::MAX,
+        };
+        let cross_len = match prefix_len_per_dim.checked_mul(pair_count) {
+            Some(value) => value,
+            None => return usize::MAX,
+        };
+        let total_len = match sum_len.checked_add(cross_len) {
+            Some(value) => value,
+            None => return usize::MAX,
+        };
+        total_len
+            .checked_mul(std::mem::size_of::<f64>())
+            .unwrap_or(usize::MAX)
+    }
+
+    fn supports_approx_cache(&self) -> bool {
+        false
+    }
+
+    fn segment_cost(&self, cache: &Self::Cache, start: usize, end: usize) -> f64 {
+        assert!(
+            start < end,
+            "segment_cost requires start < end; got start={start}, end={end}"
+        );
+        assert!(
+            end <= cache.n,
+            "segment_cost end out of bounds: end={end}, n={}",
+            cache.n
+        );
+
+        let m = (end - start) as f64;
+        let prefix_len = cache.prefix_len_per_dim();
+
+        if cache.d == 1 {
+            let sum = cache.prefix_sum[end] - cache.prefix_sum[start];
+            let sum_sq = cache.prefix_cross[end] - cache.prefix_cross[start];
+            let mean = sum / m;
+            let raw_var = sum_sq / m - mean * mean;
+            return m * normalize_variance(raw_var).ln();
+        }
+
+        let mut sums = vec![0.0; cache.d];
+        for (dim, slot) in sums.iter_mut().enumerate() {
+            let offset = cache.dim_offset(dim);
+            *slot = cache.prefix_sum[offset + end] - cache.prefix_sum[offset + start];
+        }
+
+        let mut covariance = vec![0.0; cache.d * cache.d];
+        let mut trace = 0.0;
+        for i in 0..cache.d {
+            let mean_i = sums[i] / m;
+            for j in i..cache.d {
+                let mean_j = sums[j] / m;
+                let pair_offset = cache.pair_offset(i, j);
+                let cross =
+                    cache.prefix_cross[pair_offset + end] - cache.prefix_cross[pair_offset + start];
+                let centered = normalize_covariance_entry(cross / m - mean_i * mean_j);
+                covariance[i * cache.d + j] = centered;
+                covariance[j * cache.d + i] = centered;
+                if i == j {
+                    trace += normalize_variance(centered);
+                }
+            }
+        }
+
+        let ridge = full_cov_ridge(trace, cache.d, m);
+        let log_det = regularized_logdet(covariance.as_slice(), cache.d, ridge);
+
+        debug_assert_eq!(
+            prefix_len,
+            cache.n + 1,
+            "prefix length invariant should hold"
+        );
+        m * log_det
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        CostNormalMeanVar, NormalCache, VAR_FLOOR, cache_overflow_err, normalize_variance,
-        read_value, strided_linear_index,
+        CostNormalFullCov, CostNormalMeanVar, NormalCache, VAR_FLOOR, cache_overflow_err,
+        normalize_variance, read_value, strided_linear_index, triangular_pair_count,
     };
     use crate::l2::CostL2Mean;
     use crate::model::CostModel;
@@ -961,6 +1348,200 @@ mod tests {
         let cost = model.segment_cost(&cache, 0, values.len());
         assert_close(cost, values.len() as f64 * f64::MAX.ln(), 1e-9);
         assert!(cost.is_finite());
+    }
+
+    #[test]
+    fn full_cov_trait_contract_and_defaults() {
+        let model = CostNormalFullCov::default();
+        assert_eq!(model.name(), "normal_full_cov");
+        assert_eq!(model.repro_mode, ReproMode::Balanced);
+        assert_eq!(model.missing_support(), MissingSupport::Reject);
+        assert!(!model.supports_approx_cache());
+    }
+
+    #[test]
+    fn full_cov_matches_diagonal_for_d1() {
+        let values: Vec<f64> = (0..64)
+            .map(|idx| {
+                let x = idx as f64;
+                (0.4 * x).sin() + (0.07 * x).cos() + x * 0.01
+            })
+            .collect();
+        let view = make_f64_view(
+            &values,
+            values.len(),
+            1,
+            MemoryLayout::CContiguous,
+            MissingPolicy::Error,
+        );
+
+        let diagonal = CostNormalMeanVar::default();
+        let diagonal_cache = diagonal
+            .precompute(&view, &CachePolicy::Full)
+            .expect("diagonal precompute should succeed");
+        let full_cov = CostNormalFullCov::default();
+        let full_cov_cache = full_cov
+            .precompute(&view, &CachePolicy::Full)
+            .expect("full-cov precompute should succeed");
+
+        let start = 7;
+        let end = 53;
+        let diagonal_cost = diagonal.segment_cost(&diagonal_cache, start, end);
+        let full_cov_cost = full_cov.segment_cost(&full_cov_cache, start, end);
+        assert_close(full_cov_cost, diagonal_cost, 1e-10);
+    }
+
+    #[test]
+    fn full_cov_prefers_correlated_segments_over_diagonal() {
+        let n = 80;
+        let d = 2;
+        let mut values = Vec::with_capacity(n * d);
+        for t in 0..n {
+            let base = t as f64 * 0.25 + (0.03 * t as f64).sin();
+            values.push(base);
+            values.push(base * 1.2 + 0.002 * (t as f64).cos());
+        }
+        let view = make_f64_view(
+            &values,
+            n,
+            d,
+            MemoryLayout::CContiguous,
+            MissingPolicy::Error,
+        );
+
+        let diagonal = CostNormalMeanVar::default();
+        let diagonal_cache = diagonal
+            .precompute(&view, &CachePolicy::Full)
+            .expect("diagonal precompute should succeed");
+        let full_cov = CostNormalFullCov::default();
+        let full_cov_cache = full_cov
+            .precompute(&view, &CachePolicy::Full)
+            .expect("full-cov precompute should succeed");
+
+        let diagonal_cost = diagonal.segment_cost(&diagonal_cache, 0, n);
+        let full_cov_cost = full_cov.segment_cost(&full_cov_cache, 0, n);
+        assert!(
+            full_cov_cost < diagonal_cost,
+            "expected full-cov cost to be lower for strongly correlated dimensions: full_cov={full_cov_cost}, diagonal={diagonal_cost}"
+        );
+    }
+
+    #[test]
+    fn full_cov_regularizes_rank_deficient_segments() {
+        let n = 3;
+        let d = 5;
+        let mut values = Vec::with_capacity(n * d);
+        for t in 0..n {
+            let x = t as f64 + 1.0;
+            values.extend([x, 2.0 * x, -x, 3.0 * x, 0.5 * x]);
+        }
+        let view = make_f64_view(
+            &values,
+            n,
+            d,
+            MemoryLayout::CContiguous,
+            MissingPolicy::Error,
+        );
+
+        let model = CostNormalFullCov::default();
+        let cache = model
+            .precompute(&view, &CachePolicy::Full)
+            .expect("full-cov precompute should succeed");
+        let cost = model.segment_cost(&cache, 0, n);
+        assert!(
+            cost.is_finite(),
+            "regularized full-cov cost should be finite on rank-deficient segments"
+        );
+    }
+
+    #[test]
+    fn full_cov_layout_coverage_c_f_and_strided() {
+        let model = CostNormalFullCov::default();
+        let c_values = vec![1.0, 10.0, 100.0, 2.0, 20.0, 200.0, 3.0, 30.0, 300.0];
+        let c_view = make_f64_view(
+            &c_values,
+            3,
+            3,
+            MemoryLayout::CContiguous,
+            MissingPolicy::Error,
+        );
+        let c_cache = model
+            .precompute(&c_view, &CachePolicy::Full)
+            .expect("C layout precompute should succeed");
+
+        let f_values = vec![1.0, 2.0, 3.0, 10.0, 20.0, 30.0, 100.0, 200.0, 300.0];
+        let f_view = make_f64_view(
+            &f_values,
+            3,
+            3,
+            MemoryLayout::FContiguous,
+            MissingPolicy::Error,
+        );
+        let f_cache = model
+            .precompute(&f_view, &CachePolicy::Full)
+            .expect("F layout precompute should succeed");
+
+        let s_view = make_f64_view(
+            &c_values,
+            3,
+            3,
+            MemoryLayout::Strided {
+                row_stride: 3,
+                col_stride: 1,
+            },
+            MissingPolicy::Error,
+        );
+        let s_cache = model
+            .precompute(&s_view, &CachePolicy::Full)
+            .expect("strided precompute should succeed");
+
+        let c_cost = model.segment_cost(&c_cache, 0, 3);
+        let f_cost = model.segment_cost(&f_cache, 0, 3);
+        let s_cost = model.segment_cost(&s_cache, 0, 3);
+        assert_close(c_cost, f_cost, 1e-12);
+        assert_close(c_cost, s_cost, 1e-12);
+    }
+
+    #[test]
+    fn full_cov_worst_case_cache_bytes_matches_formula() {
+        let model = CostNormalFullCov::default();
+        let values = vec![0.0; 12];
+        let view = make_f64_view(
+            &values,
+            3,
+            4,
+            MemoryLayout::CContiguous,
+            MissingPolicy::Error,
+        );
+        let pair_count = triangular_pair_count(view.d).expect("pair count should fit");
+        let expected = (view.n + 1)
+            .checked_mul(view.d + pair_count)
+            .and_then(|len| len.checked_mul(std::mem::size_of::<f64>()))
+            .expect("formula should not overflow");
+        assert_eq!(model.worst_case_cache_bytes(&view), expected);
+    }
+
+    #[test]
+    fn full_cov_rejects_approximate_cache_policy() {
+        let model = CostNormalFullCov::default();
+        let values = vec![1.0, 2.0, 3.0, 4.0];
+        let view = make_f64_view(
+            &values,
+            2,
+            2,
+            MemoryLayout::CContiguous,
+            MissingPolicy::Error,
+        );
+        let err = model
+            .precompute(
+                &view,
+                &CachePolicy::Approximate {
+                    max_bytes: 1024,
+                    error_tolerance: 0.1,
+                },
+            )
+            .expect_err("approximate cache policy should fail");
+        assert!(matches!(err, CpdError::NotSupported(_)));
     }
 
     #[test]

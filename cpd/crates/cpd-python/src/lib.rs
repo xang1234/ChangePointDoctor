@@ -16,7 +16,7 @@ use cpd_core::{
     OfflineChangePointResult as CoreOfflineChangePointResult, OfflineDetector, OnlineDetector,
     Penalty, ReproMode, Stopping, TimeSeriesView,
 };
-use cpd_costs::{CostL1Median, CostL2Mean, CostNormalMeanVar};
+use cpd_costs::{CostL1Median, CostL2Mean, CostNormalFullCov, CostNormalMeanVar};
 use cpd_doctor::{
     CostConfig as DoctorCostConfig, DetectorConfig as DoctorDetectorConfig,
     OfflineDetectorConfig as DoctorOfflineDetectorConfig, PipelineSpec as DoctorPipelineSpec,
@@ -182,6 +182,7 @@ enum PyCostModel {
     L1Median,
     L2,
     Normal,
+    NormalFullCov,
 }
 
 impl PyCostModel {
@@ -190,8 +191,9 @@ impl PyCostModel {
             "l1" | "l1_median" => Ok(Self::L1Median),
             "l2" => Ok(Self::L2),
             "normal" => Ok(Self::Normal),
+            "normal_full_cov" | "normal_fullcov" | "normalfullcov" => Ok(Self::NormalFullCov),
             _ => Err(PyValueError::new_err(format!(
-                "unsupported model '{model}'; expected one of: 'l1_median', 'l2', 'normal'"
+                "unsupported model '{model}'; expected one of: 'l1_median', 'l2', 'normal', 'normal_full_cov'"
             ))),
         }
     }
@@ -201,6 +203,7 @@ impl PyCostModel {
             Self::L1Median => "l1_median",
             Self::L2 => "l2",
             Self::Normal => "normal",
+            Self::NormalFullCov => "normal_full_cov",
         }
     }
 }
@@ -1346,10 +1349,13 @@ fn parse_pipeline_cost(value: &Bound<'_, PyAny>) -> PyResult<DoctorCostConfig> {
         "l1" | "l1_median" | "l1median" => Ok(DoctorCostConfig::L1Median),
         "l2" => Ok(DoctorCostConfig::L2),
         "normal" => Ok(DoctorCostConfig::Normal),
+        "normal_full_cov" | "normal_fullcov" | "normalfullcov" => {
+            Ok(DoctorCostConfig::NormalFullCov)
+        }
         "nig" => Ok(DoctorCostConfig::Nig),
         "none" => Ok(DoctorCostConfig::None),
         _ => Err(PyValueError::new_err(format!(
-            "unsupported pipeline.cost '{raw}'; expected one of: 'l1_median', 'l2', 'normal', 'nig', 'none'"
+            "unsupported pipeline.cost '{raw}'; expected one of: 'l1_median', 'l2', 'normal', 'normal_full_cov', 'nig', 'none'"
         ))),
     }
 }
@@ -1380,7 +1386,7 @@ fn parse_pipeline_spec(pipeline: &Bound<'_, PyAny>) -> PyResult<DoctorPipelineSp
     };
     if matches!(cost, DoctorCostConfig::None) {
         return Err(PyValueError::new_err(
-            "detect_offline requires pipeline.cost to be one of: 'l1_median', 'l2', 'normal', 'nig'",
+            "detect_offline requires pipeline.cost to be one of: 'l1_median', 'l2', 'normal', 'normal_full_cov', 'nig'",
         ));
     }
     if matches!(&detector, DoctorOfflineDetectorConfig::Fpop(_))
@@ -1678,6 +1684,15 @@ fn detect_with_view(
             let detector = OfflinePelt::new(CostNormalMeanVar::new(repro_mode), config)?;
             detector.detect(view, &ctx)
         }
+        (PyDetectorKind::Pelt, PyCostModel::NormalFullCov) => {
+            let config = PeltConfig {
+                stopping,
+                params_per_segment: 3,
+                cancel_check_every: 1000,
+            };
+            let detector = OfflinePelt::new(CostNormalFullCov::new(repro_mode), config)?;
+            detector.detect(view, &ctx)
+        }
         (PyDetectorKind::Binseg, PyCostModel::L2) => {
             let config = BinSegConfig {
                 stopping,
@@ -1705,6 +1720,15 @@ fn detect_with_view(
             let detector = OfflineBinSeg::new(CostNormalMeanVar::new(repro_mode), config)?;
             detector.detect(view, &ctx)
         }
+        (PyDetectorKind::Binseg, PyCostModel::NormalFullCov) => {
+            let config = BinSegConfig {
+                stopping,
+                params_per_segment: 3,
+                cancel_check_every: 1000,
+            };
+            let detector = OfflineBinSeg::new(CostNormalFullCov::new(repro_mode), config)?;
+            detector.detect(view, &ctx)
+        }
         (PyDetectorKind::Fpop, PyCostModel::L2) => {
             let config = FpopConfig {
                 stopping,
@@ -1714,9 +1738,12 @@ fn detect_with_view(
             let detector = OfflineFpop::new(CostL2Mean::new(repro_mode), config)?;
             detector.detect(view, &ctx)
         }
-        (PyDetectorKind::Fpop, PyCostModel::L1Median | PyCostModel::Normal) => Err(
-            CpdError::invalid_input("detector='fpop' requires cost='l2'"),
-        ),
+        (
+            PyDetectorKind::Fpop,
+            PyCostModel::L1Median | PyCostModel::Normal | PyCostModel::NormalFullCov,
+        ) => Err(CpdError::invalid_input(
+            "detector='fpop' requires cost='l2'",
+        )),
     }
 }
 
@@ -2970,6 +2997,40 @@ mod tests {
                 Some(&locals),
             )
             .expect("fpop should reject non-l2 cost");
+        });
+    }
+
+    #[test]
+    fn detect_offline_supports_normal_full_cov_cost() {
+        with_python(|py| {
+            let module = PyModule::new(py, "_cpd_rs").expect("module should be created");
+            _cpd_rs(&module).expect("module registration should succeed");
+
+            let locals = PyDict::new(py);
+            locals
+                .set_item("cpd_rs", &module)
+                .expect("locals should accept module");
+            run_python(
+                py,
+                "import numpy as np\nx = np.array([[0., 0.], [0.1, 0.1], [0.2, 0.2], [5.0, 5.1], [5.2, 5.2], [5.3, 5.4]], dtype=np.float64)\nresult = cpd_rs.detect_offline(x, detector='pelt', cost='normal_full_cov', stopping={'n_bkps': 1})",
+                None,
+                Some(&locals),
+            )
+            .expect("normal_full_cov should run");
+
+            let result = locals
+                .get_item("result")
+                .expect("locals lookup should succeed")
+                .expect("result should exist");
+            let diagnostics = result
+                .getattr("diagnostics")
+                .expect("diagnostics should exist");
+            let cost_model: String = diagnostics
+                .getattr("cost_model")
+                .expect("cost_model should exist")
+                .extract()
+                .expect("cost_model should extract");
+            assert_eq!(cost_model, "normal_full_cov");
         });
     }
 

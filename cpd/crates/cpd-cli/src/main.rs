@@ -134,6 +134,7 @@ enum CostArg {
     L1Median,
     L2,
     Normal,
+    NormalFullCov,
     Nig,
 }
 
@@ -173,9 +174,10 @@ impl CostArg {
             "l1" | "l1_median" => Ok(Self::L1Median),
             "l2" => Ok(Self::L2),
             "normal" => Ok(Self::Normal),
+            "normal_full_cov" | "normal_fullcov" | "normalfullcov" => Ok(Self::NormalFullCov),
             "nig" => Ok(Self::Nig),
             _ => Err(CliError::invalid_input(format!(
-                "invalid --cost '{raw}'; expected one of: ar, l1_median, l2, normal, nig"
+                "invalid --cost '{raw}'; expected one of: ar, l1_median, l2, normal, normal_full_cov, nig"
             ))),
         }
     }
@@ -840,7 +842,7 @@ fn print_command_help(command: &str) -> Result<(), CliError> {
     match command {
         "detect" => {
             println!(
-                "USAGE:\n  cpd detect --input <path> [OPTIONS]\n\nOPTIONS:\n  --algorithm <pelt|binseg|fpop|wbs>  Default: pelt\n  --cost <ar|l1_median|l2|normal|nig> Default: l2\n  --penalty <bic|aic|manual>          Default: bic\n  --penalty-value <float>             Required when --penalty=manual\n  --k <usize>                         Use KnownK stopping\n  --seed <u64>                        WBS seed only\n  --min-segment-len <usize>\n  --max-change-points <usize>\n  --max-depth <usize>\n  --jump <usize>\n  --input <path>                      Required (.csv or .npy)\n  --output <path>                     Write JSON output to file"
+                "USAGE:\n  cpd detect --input <path> [OPTIONS]\n\nOPTIONS:\n  --algorithm <pelt|binseg|fpop|wbs>                    Default: pelt\n  --cost <ar|l1_median|l2|normal|normal_full_cov|nig>   Default: l2\n  --penalty <bic|aic|manual>                            Default: bic\n  --penalty-value <float>                               Required when --penalty=manual\n  --k <usize>                                           Use KnownK stopping\n  --seed <u64>                                          WBS seed only\n  --min-segment-len <usize>\n  --max-change-points <usize>\n  --max-depth <usize>\n  --jump <usize>\n  --input <path>                                        Required (.csv or .npy)\n  --output <path>                                       Write JSON output to file"
             );
             Ok(())
         }
@@ -1066,6 +1068,7 @@ fn build_detect_pipeline(args: &DetectArgs) -> Result<PipelineSpec, CliError> {
             CostArg::L1Median => CostConfig::L1Median,
             CostArg::L2 => CostConfig::L2,
             CostArg::Normal => CostConfig::Normal,
+            CostArg::NormalFullCov => CostConfig::NormalFullCov,
             CostArg::Nig => CostConfig::Nig,
         },
         preprocess: None,
@@ -2022,11 +2025,12 @@ fn parse_cost_value(value: Option<&Value>, context: &str) -> Result<CostConfig, 
         "l1" | "l1_median" | "l1median" => CostConfig::L1Median,
         "l2" => CostConfig::L2,
         "normal" => CostConfig::Normal,
+        "normal_full_cov" | "normal_fullcov" | "normalfullcov" => CostConfig::NormalFullCov,
         "nig" => CostConfig::Nig,
         "none" => CostConfig::None,
         _ => {
             return Err(CliError::invalid_input(format!(
-                "unsupported {context} '{raw}'; expected one of: 'ar', 'l1_median', 'l2', 'normal', 'nig', 'none'"
+                "unsupported {context} '{raw}'; expected one of: 'ar', 'l1_median', 'l2', 'normal', 'normal_full_cov', 'nig', 'none'"
             )));
         }
     };
@@ -2539,6 +2543,23 @@ mod tests {
     }
 
     #[test]
+    fn detect_pipeline_accepts_normal_full_cov_cost() {
+        let tokens = vec![
+            "--input".to_string(),
+            "/tmp/series.csv".to_string(),
+            "--algorithm".to_string(),
+            "pelt".to_string(),
+            "--cost".to_string(),
+            "normal_full_cov".to_string(),
+            "--k".to_string(),
+            "2".to_string(),
+        ];
+        let args = parse_detect_args(tokens.as_slice()).expect("detect args should parse");
+        let pipeline = build_detect_pipeline(&args).expect("pelt+normal_full_cov should build");
+        assert!(matches!(pipeline.cost, CostConfig::NormalFullCov));
+    }
+
+    #[test]
     fn detect_pipeline_rejects_fpop_with_non_l2_cost() {
         let tokens = vec![
             "--input".to_string(),
@@ -2573,6 +2594,19 @@ mod tests {
             pipeline.detector,
             DetectorConfig::Offline(OfflineDetectorConfig::Fpop(_))
         ));
+    }
+
+    #[test]
+    fn pipeline_parser_accepts_normal_full_cov_cost() {
+        let raw = r#"
+        {
+          "detector": {"kind": "pelt"},
+          "cost": "normal_full_cov",
+          "stopping": {"n_bkps": 2}
+        }
+        "#;
+        let pipeline = parse_pipeline_spec_document(raw).expect("pipeline should parse");
+        assert!(matches!(pipeline.cost, CostConfig::NormalFullCov));
     }
 
     #[test]

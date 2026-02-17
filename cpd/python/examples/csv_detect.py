@@ -43,7 +43,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--cost",
-        choices=("l2", "normal"),
+        choices=("l2", "normal", "normal_full_cov"),
         default="l2",
         help="Cost model (default: l2)",
     )

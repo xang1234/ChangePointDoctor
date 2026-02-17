@@ -4,8 +4,8 @@
 
 use cpd_core::{CachePolicy, DTypeView, MemoryLayout, MissingPolicy, TimeIndex, TimeSeriesView};
 use cpd_costs::{
-    CostAR, CostBernoulli, CostL2Mean, CostLinear, CostModel, CostNIGMarginal, CostNormalMeanVar,
-    CostPoissonRate,
+    CostAR, CostBernoulli, CostL2Mean, CostLinear, CostModel, CostNIGMarginal, CostNormalFullCov,
+    CostNormalMeanVar, CostPoissonRate,
 };
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
 
@@ -90,6 +90,7 @@ fn should_run_bench(bench_id: &str, exact: Option<&str>) -> bool {
 fn benchmark_multivariate_segment_scaling(c: &mut Criterion) {
     let l2_model = CostL2Mean::default();
     let normal_model = CostNormalMeanVar::default();
+    let normal_full_cov_model = CostNormalFullCov::default();
     let nig_model = CostNIGMarginal::default();
     let poisson_model = CostPoissonRate::default();
     let bernoulli_model = CostBernoulli::default();
@@ -104,6 +105,7 @@ fn benchmark_multivariate_segment_scaling(c: &mut Criterion) {
     for d in BENCH_DIMS {
         let l2_name = format!("l2_segment_cost_n5e4_d{d}");
         let normal_name = format!("normal_segment_cost_n5e4_d{d}");
+        let normal_full_cov_name = format!("normal_full_cov_segment_cost_n5e4_d{d}");
         let nig_name = format!("nig_segment_cost_n5e4_d{d}");
         let poisson_name = format!("poisson_segment_cost_n5e4_d{d}");
         let bernoulli_name = format!("bernoulli_segment_cost_n5e4_d{d}");
@@ -111,6 +113,7 @@ fn benchmark_multivariate_segment_scaling(c: &mut Criterion) {
         let ar_name = format!("ar_segment_cost_n5e4_d{d}");
         let run_l2 = should_run_bench(&l2_name, exact.as_deref());
         let run_normal = should_run_bench(&normal_name, exact.as_deref());
+        let run_normal_full_cov = should_run_bench(&normal_full_cov_name, exact.as_deref());
         let run_nig = should_run_bench(&nig_name, exact.as_deref());
         let run_poisson = should_run_bench(&poisson_name, exact.as_deref());
         let run_bernoulli = should_run_bench(&bernoulli_name, exact.as_deref());
@@ -118,6 +121,7 @@ fn benchmark_multivariate_segment_scaling(c: &mut Criterion) {
         let run_ar = should_run_bench(&ar_name, exact.as_deref());
         if !(run_l2
             || run_normal
+            || run_normal_full_cov
             || run_nig
             || run_poisson
             || run_bernoulli
@@ -153,6 +157,21 @@ fn benchmark_multivariate_segment_scaling(c: &mut Criterion) {
                 b.iter(|| {
                     normal_model.segment_cost(
                         black_box(&normal_cache),
+                        black_box(start),
+                        black_box(end),
+                    )
+                })
+            });
+        }
+
+        if run_normal_full_cov {
+            let normal_full_cov_cache = normal_full_cov_model
+                .precompute(&continuous_view, &CachePolicy::Full)
+                .expect("NormalFullCov precompute should succeed");
+            group.bench_function(normal_full_cov_name, |b| {
+                b.iter(|| {
+                    normal_full_cov_model.segment_cost(
+                        black_box(&normal_full_cov_cache),
                         black_box(start),
                         black_box(end),
                     )
