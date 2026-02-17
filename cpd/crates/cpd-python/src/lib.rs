@@ -1300,7 +1300,7 @@ fn parse_pipeline_cost(value: &Bound<'_, PyAny>) -> PyResult<DoctorCostConfig> {
         .extract::<String>()
         .map_err(|_| PyTypeError::new_err("pipeline.cost must be a string"))?;
     match raw.to_ascii_lowercase().as_str() {
-        "l1" | "l1_median" => Ok(DoctorCostConfig::L1Median),
+        "l1" | "l1_median" | "l1median" => Ok(DoctorCostConfig::L1Median),
         "l2" => Ok(DoctorCostConfig::L2),
         "normal" => Ok(DoctorCostConfig::Normal),
         "nig" => Ok(DoctorCostConfig::Nig),
@@ -2864,6 +2864,47 @@ mod tests {
                 Some(&locals),
             )
             .expect("serde-shaped pipeline and explicit calls should succeed");
+
+            let pipeline_result = locals
+                .get_item("pipeline_result")
+                .expect("locals lookup should succeed")
+                .expect("pipeline_result should exist");
+            let explicit_result = locals
+                .get_item("explicit_result")
+                .expect("locals lookup should succeed")
+                .expect("explicit_result should exist");
+
+            let pipeline_breakpoints: Vec<usize> = pipeline_result
+                .getattr("breakpoints")
+                .expect("pipeline breakpoints should exist")
+                .extract()
+                .expect("pipeline breakpoints should extract");
+            let explicit_breakpoints: Vec<usize> = explicit_result
+                .getattr("breakpoints")
+                .expect("explicit breakpoints should exist")
+                .extract()
+                .expect("explicit breakpoints should extract");
+            assert_eq!(pipeline_breakpoints, explicit_breakpoints);
+        });
+    }
+
+    #[test]
+    fn detect_offline_pipeline_spec_accepts_rust_serde_l1median_cost() {
+        with_python(|py| {
+            let module = PyModule::new(py, "_cpd_rs").expect("module should be created");
+            _cpd_rs(&module).expect("module registration should succeed");
+
+            let locals = PyDict::new(py);
+            locals
+                .set_item("cpd_rs", &module)
+                .expect("locals should accept module");
+            run_python(
+                py,
+                "import numpy as np\nx = np.array([0.,0.,0.,0.,10.,10.,10.,10.,-5.,-5.,-5.,-5.], dtype=np.float64)\npipeline = {'detector': {'Offline': {'Pelt': {'stopping': {'KnownK': 2}, 'params_per_segment': 2, 'cancel_check_every': 1000}}}, 'cost': 'L1Median', 'constraints': {'min_segment_len': 2}, 'stopping': {'KnownK': 2}, 'seed': None}\npipeline_result = cpd_rs.detect_offline(x, pipeline=pipeline)\nexplicit_result = cpd_rs.detect_offline(x, detector='pelt', cost='l1_median', constraints={'min_segment_len': 2}, stopping={'n_bkps': 2})",
+                None,
+                Some(&locals),
+            )
+            .expect("serde-shaped L1 pipeline and explicit calls should succeed");
 
             let pipeline_result = locals
                 .get_item("pipeline_result")

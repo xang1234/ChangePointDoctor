@@ -1946,7 +1946,7 @@ fn parse_cost_value(value: Option<&Value>, context: &str) -> Result<CostConfig, 
     let raw = parse_string(value, context)?;
     let cost = match raw.to_ascii_lowercase().as_str() {
         "ar" => CostConfig::Ar,
-        "l1" | "l1_median" => CostConfig::L1Median,
+        "l1" | "l1_median" | "l1median" => CostConfig::L1Median,
         "l2" => CostConfig::L2,
         "normal" => CostConfig::Normal,
         "nig" => CostConfig::Nig,
@@ -2384,6 +2384,34 @@ mod tests {
             DetectorConfig::Offline(OfflineDetectorConfig::Pelt(_))
         ));
         assert!(matches!(pipeline.stopping, Some(Stopping::KnownK(2))));
+    }
+
+    #[test]
+    fn pipeline_parser_accepts_pipeline_spec_envelope_with_serde_l1median_cost() {
+        let raw = r#"
+        {
+          "schema_version": 0,
+          "kind": "pipeline_spec",
+          "payload": {
+            "detector": "pelt",
+            "cost": "L1Median",
+            "constraints": {
+              "min_segment_len": 2
+            },
+            "stopping": {
+              "n_bkps": 1
+            }
+          }
+        }
+        "#;
+
+        let pipeline = parse_pipeline_spec_document(raw).expect("pipeline should parse");
+        assert!(matches!(pipeline.cost, CostConfig::L1Median));
+        assert!(matches!(
+            pipeline.detector,
+            DetectorConfig::Offline(OfflineDetectorConfig::Pelt(_))
+        ));
+        assert!(matches!(pipeline.stopping, Some(Stopping::KnownK(1))));
     }
 
     #[test]
