@@ -188,18 +188,13 @@ fn build_cost_eval_budget(seed: u8) -> Option<usize> {
     }
 }
 
-fn choose_dims(seed: u8, extra_seed: u8) -> usize {
-    match seed % 8 {
+fn choose_dims(seed: u8) -> usize {
+    match seed % 16 {
         0 => 0,
         1 => 2,
         2 => 3,
-        _ => {
-            if extra_seed & 1 == 0 {
-                1
-            } else {
-                4
-            }
-        }
+        3 => 4,
+        _ => 1,
     }
 }
 
@@ -277,7 +272,7 @@ fuzz_target!(|data: &[u8]| {
         let raw_seed = cursor.next_i16();
         let x = build_observation_value(model_kind, base, cursor.next_u8(), raw_seed);
 
-        let dims = choose_dims(cursor.next_u8(), cursor.next_u8());
+        let dims = choose_dims(cursor.next_u8());
 
         let mut x_t = Vec::with_capacity(dims);
         for dim in 0..dims {
