@@ -4344,10 +4344,9 @@ mod tests {
                 .expect("large noise recommendation");
         collect_offline_coverage(&large_noise_recommendations, &mut detectors, &mut costs);
 
-        let mut ar = vec![0.0; 120_000];
-        for t in 1..ar.len() {
-            ar[t] = 0.88 * ar[t - 1] + 0.2 * pseudo_uniform_noise(&mut state);
-        }
+        let ar = (0..120_000)
+            .map(|t| (2.0 * std::f64::consts::PI * t as f64 / 200.0).sin())
+            .collect::<Vec<_>>();
         let ar_view = make_univariate_view(&ar);
         let ar_recommendations = recommend(&ar_view, Objective::Accuracy, false, None, 0.20, true)
             .expect("ar recommendation");
@@ -4414,7 +4413,7 @@ mod tests {
         let expected_detectors = ["binseg", "fpop", "pelt", "wbs"]
             .into_iter()
             .collect::<BTreeSet<_>>();
-        let expected_costs = ["l1_median", "l2", "nig", "normal"]
+        let expected_costs = ["ar", "l1_median", "l2", "nig", "normal"]
             .into_iter()
             .collect::<BTreeSet<_>>();
 
