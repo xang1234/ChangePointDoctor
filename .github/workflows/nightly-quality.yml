@@ -22,6 +22,7 @@ jobs:
           - cost_segment_cost_no_panic
           - offline_detectors_no_panic
           - online_bocpd_update_no_panic
+          - online_checkpoint_deserialize_no_panic
           - numpy_interop_no_panic
     steps:
       - name: Checkout
