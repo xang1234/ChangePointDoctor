@@ -420,7 +420,7 @@ fn with_stopping_and_seed(
         OfflineDetectorConfig::SegNeigh(config) => {
             if config.stopping != *stopping {
                 return Err(CpdError::invalid_input(format!(
-                    "offline pipeline has inconsistent stopping configuration for detector=dynp: detector.stopping={:?}, pipeline.stopping={:?}",
+                    "offline pipeline has inconsistent stopping configuration for detector=segneigh (dynp): detector.stopping={:?}, pipeline.stopping={:?}",
                     config.stopping, stopping
                 )));
             }
