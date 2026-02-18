@@ -10,6 +10,7 @@ homepage.workspace = true
 documentation = "https://docs.rs/cpd-core"
 keywords = ["changepoint", "time-series", "statistics"]
 categories = ["algorithms", "science"]
+build = "build.rs"
 
 [lib]
 path = "src/lib.rs"

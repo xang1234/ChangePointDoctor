@@ -33,6 +33,7 @@ parity = ["pytest>=8.0", "ruptures>=1.1.9"]
 dev = [
   "maturin>=1.7",
   "pytest>=8.0",
+  "jsonschema>=4.0",
   "jupyterlab>=4.0",
   "matplotlib>=3.7",
   "ruptures>=1.1.9",

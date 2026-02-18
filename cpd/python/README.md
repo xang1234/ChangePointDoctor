@@ -106,6 +106,8 @@ see [`../docs/reproducibility_modes.md`](../docs/reproducibility_modes.md).
 follow the versioned contract in
 [`../docs/result_json_contract.md`](../docs/result_json_contract.md), with the
 canonical schema marker at `diagnostics.schema_version`.
+When available, build provenance is emitted under `diagnostics.build` (for
+Python adapters this includes ABI and enabled feature context).
 
 In `0.x`, schema compatibility follows the bounded version window documented in
 [`../VERSIONING.md`](../VERSIONING.md): readers accept only supported

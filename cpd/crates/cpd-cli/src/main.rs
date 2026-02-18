@@ -5,7 +5,7 @@
 use cpd_cli::run_pipeline;
 use cpd_core::{
     Constraints, CpdError, MemoryLayout, MissingPolicy, OfflineChangePointResult, OnlineStepResult,
-    Penalty, Stopping, TimeIndex, TimeSeriesView,
+    Penalty, Stopping, TimeIndex, TimeSeriesView, enrich_diagnostics_build,
 };
 use cpd_doctor::{
     CostConfig, DetectorConfig, Objective, OfflineDetectorConfig, PipelineSpec, Recommendation,
@@ -504,6 +504,45 @@ struct ErrorPayload {
     message: String,
 }
 
+fn cli_adapter_features() -> Vec<String> {
+    let mut features = Vec::new();
+    if cfg!(feature = "serde") {
+        features.push("serde".to_string());
+    }
+    if cfg!(feature = "rayon") {
+        features.push("rayon".to_string());
+    }
+    if cfg!(feature = "tracing") {
+        features.push("tracing".to_string());
+    }
+    if cfg!(feature = "simd") {
+        features.push("simd".to_string());
+    }
+    if cfg!(feature = "kernel") {
+        features.push("kernel".to_string());
+    }
+    if cfg!(feature = "kernel-approx") {
+        features.push("kernel-approx".to_string());
+    }
+    if cfg!(feature = "blas") {
+        features.push("blas".to_string());
+    }
+    if cfg!(feature = "gp") {
+        features.push("gp".to_string());
+    }
+    if cfg!(feature = "preprocess") {
+        features.push("preprocess".to_string());
+    }
+    if cfg!(feature = "repro-strict") {
+        features.push("repro-strict".to_string());
+    }
+    features
+}
+
+fn attach_cli_build_context(result: &mut OfflineChangePointResult) {
+    enrich_diagnostics_build(&mut result.diagnostics, Some(cli_adapter_features()), None);
+}
+
 fn main() {
     if let Err(err) = run() {
         emit_structured_error(&err);
@@ -944,7 +983,8 @@ fn handle_detect(args: DetectArgs) -> Result<(), CliError> {
     let input = load_series(args.input.as_path())?;
     let view = input.as_view()?;
     let pipeline = build_detect_pipeline(&args)?;
-    let result = run_pipeline(&view, &pipeline)?;
+    let mut result = run_pipeline(&view, &pipeline)?;
+    attach_cli_build_context(&mut result);
 
     write_json_output(
         &DetectOutput {
@@ -962,7 +1002,8 @@ fn handle_run(args: RunArgs) -> Result<(), CliError> {
     let input = load_series(args.input.as_path())?;
     let view = input.as_view()?;
     let pipeline = load_pipeline_spec(args.pipeline.as_path())?;
-    let result = run_pipeline(&view, &pipeline)?;
+    let mut result = run_pipeline(&view, &pipeline)?;
+    attach_cli_build_context(&mut result);
 
     write_json_output(
         &RunOutput {
@@ -2533,11 +2574,11 @@ fn emit_structured_error(err: &CliError) {
 #[cfg(test)]
 mod tests {
     use super::{
-        JsonFormat, build_detect_pipeline, encode_json, parse_csv_data, parse_detect_args,
-        parse_doctor_args, parse_eval_args, parse_npy_bytes, parse_pipeline_spec_document,
-        parse_run_args, resolve_stopping,
+        JsonFormat, attach_cli_build_context, build_detect_pipeline, encode_json, parse_csv_data,
+        parse_detect_args, parse_doctor_args, parse_eval_args, parse_npy_bytes,
+        parse_pipeline_spec_document, parse_run_args, resolve_stopping,
     };
-    use cpd_core::{Penalty, Stopping};
+    use cpd_core::{Diagnostics, OfflineChangePointResult, Penalty, Stopping};
     use cpd_doctor::{CostConfig, DetectorConfig, OfflineDetectorConfig};
 
     #[test]
@@ -2891,6 +2932,23 @@ mod tests {
         assert!(pretty.contains('\n'));
         assert!(!compact.contains('\n'));
         assert_eq!(compact, "[1,2]");
+    }
+
+    #[test]
+    fn attach_cli_build_context_adds_feature_metadata() {
+        let mut result = OfflineChangePointResult::new(5, vec![5], Diagnostics::default())
+            .expect("result should construct");
+        attach_cli_build_context(&mut result);
+        let build = result
+            .diagnostics
+            .build
+            .as_ref()
+            .expect("build metadata should be present");
+        let features = build
+            .features
+            .as_ref()
+            .expect("feature metadata should be present");
+        assert!(features.contains(&"serde".to_string()));
     }
 
     fn make_npy_v1(descr: &str, fortran_order: bool, shape: &[usize], values: &[f64]) -> Vec<u8> {

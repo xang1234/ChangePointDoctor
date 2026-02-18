@@ -3,6 +3,7 @@
 from ._cpd_rs import (
     Binseg,
     Bocpd,
+    BuildInfo,
     Cusum,
     Diagnostics,
     Fpop,
@@ -21,6 +22,7 @@ from ._cpd_rs import (
 __all__ = [
     "__version__",
     "PruningStats",
+    "BuildInfo",
     "SegmentStats",
     "Diagnostics",
     "OfflineChangePointResult",

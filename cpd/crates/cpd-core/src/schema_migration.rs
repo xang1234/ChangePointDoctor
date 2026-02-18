@@ -340,6 +340,7 @@ mod tests {
         assert!(diagnostics_runtime.thread_count.is_none());
         assert!(diagnostics_runtime.blas_backend.is_none());
         assert!(diagnostics_runtime.cpu_features.is_none());
+        assert!(diagnostics_runtime.build.is_none());
         assert!(diagnostics_runtime.pruning_stats.is_none());
         assert!(diagnostics_runtime.missing_policy_applied.is_none());
         assert!(diagnostics_runtime.missing_fraction.is_none());

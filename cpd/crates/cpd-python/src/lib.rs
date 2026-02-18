@@ -54,7 +54,8 @@ use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 use pyo3::types::{PyAnyMethods, PyDict, PyList, PyModule};
 use result_objects::{
-    PyDiagnostics, PyOfflineChangePointResult, PyOnlineStepResult, PyPruningStats, PySegmentStats,
+    PyBuildInfo, PyDiagnostics, PyOfflineChangePointResult, PyOnlineStepResult, PyPruningStats,
+    PySegmentStats, attach_python_adapter_build_context,
 };
 #[cfg(feature = "serde")]
 use std::path::PathBuf;
@@ -2026,6 +2027,7 @@ impl PyPelt {
             result.diagnostics.notes.push(format!("fit: {note}"));
         }
 
+        attach_python_adapter_build_context(&mut result.diagnostics);
         Ok(result.into())
     }
 
@@ -2132,6 +2134,7 @@ impl PyBinseg {
             result.diagnostics.notes.push(format!("fit: {note}"));
         }
 
+        attach_python_adapter_build_context(&mut result.diagnostics);
         Ok(result.into())
     }
 
@@ -2226,6 +2229,7 @@ impl PyFpop {
             result.diagnostics.notes.push(format!("fit: {note}"));
         }
 
+        attach_python_adapter_build_context(&mut result.diagnostics);
         Ok(result.into())
     }
 
@@ -2760,6 +2764,7 @@ fn detect_offline(
         for note in owned.diagnostics() {
             result.diagnostics.notes.push(format!("input: {note}"));
         }
+        attach_python_adapter_build_context(&mut result.diagnostics);
         return Ok(result.into());
     }
 
@@ -2819,6 +2824,7 @@ fn detect_offline(
         result.diagnostics.notes.push(format!("input: {note}"));
     }
 
+    attach_python_adapter_build_context(&mut result.diagnostics);
     Ok(result.into())
 }
 
@@ -2871,6 +2877,7 @@ fn smoke_detect(values: &Bound<'_, PyAny>) -> PyResult<Vec<usize>> {
 #[pymodule]
 fn _cpd_rs(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add("__version__", env!("CARGO_PKG_VERSION"))?;
+    module.add_class::<PyBuildInfo>()?;
     module.add_class::<PyPruningStats>()?;
     module.add_class::<PySegmentStats>()?;
     module.add_class::<PyDiagnostics>()?;

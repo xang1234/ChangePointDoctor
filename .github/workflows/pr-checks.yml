@@ -250,7 +250,7 @@ jobs:
 
       - name: Build Python extension
         run: |
-          python -m pip install --upgrade pip maturin numpy pytest
+          python -m pip install --upgrade pip maturin numpy pytest jsonschema
           maturin build --release --interpreter python
           python - <<'PY'
           from pathlib import Path
@@ -272,6 +272,7 @@ jobs:
           pytest -q \
             tests/test_pelt.py \
             tests/test_integration_mvp_a.py \
+            tests/test_result_schema_contract.py \
             tests/test_smoke.py
 
       - name: Run cpd-python Rust lib tests

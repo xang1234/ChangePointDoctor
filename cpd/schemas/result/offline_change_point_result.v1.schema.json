@@ -197,6 +197,16 @@
             "type": "string"
           }
         },
+        "build": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/buildInfo"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "params_json": {},
         "pruning_stats": {
           "anyOf": [
@@ -226,6 +236,36 @@
             "null"
           ],
           "minimum": 0
+        }
+      },
+      "additionalProperties": true
+    },
+    "buildInfo": {
+      "type": "object",
+      "properties": {
+        "git_sha": {
+          "type": "string"
+        },
+        "git_dirty": {
+          "type": "boolean"
+        },
+        "rustc_version": {
+          "type": "string"
+        },
+        "target_triple": {
+          "type": "string"
+        },
+        "profile": {
+          "type": "string"
+        },
+        "features": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "abi": {
+          "type": "string"
         }
       },
       "additionalProperties": true

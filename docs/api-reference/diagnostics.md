@@ -24,6 +24,7 @@ Accessible via `result.diagnostics`.
 | `thread_count` | `int \| None` | Number of threads used |
 | `blas_backend` | `str \| None` | BLAS backend name (`None` for default BLAS-free wheels) |
 | `cpu_features` | `list[str] \| None` | Detected CPU features (e.g., `["avx2", "fma"]`) |
+| `build` | `BuildInfo \| None` | Build provenance and adapter context (omitted when unavailable) |
 | `params_json` | `Any \| None` | Algorithm-specific parameters as JSON |
 | `pruning_stats` | `PruningStats \| None` | Pruning statistics (PELT/FPOP only) |
 | `missing_policy_applied` | `str \| None` | Missing data policy used |
@@ -48,6 +49,24 @@ if diag.warnings:
     for w in diag.warnings:
         print(f"Warning: {w}")
 ```
+
+---
+
+## `BuildInfo`
+
+Optional build provenance object exposed via `result.diagnostics.build`.
+
+### Properties
+
+| Property | Type | Description |
+|---|---|---|
+| `git_sha` | `str \| None` | Build-time commit SHA (best effort) |
+| `git_dirty` | `bool \| None` | Build-time dirty flag (best effort) |
+| `rustc_version` | `str \| None` | Rust compiler version used for build |
+| `target_triple` | `str \| None` | Rust target triple |
+| `profile` | `str \| None` | Cargo profile (`debug`, `release`, etc.) |
+| `features` | `list[str] \| None` | Enabled adapter/runtime feature flags |
+| `abi` | `str \| None` | Adapter ABI context (for Python: `pyo3-abi3-py39`) |
 
 ---
 

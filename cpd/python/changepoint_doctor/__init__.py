@@ -7,6 +7,7 @@ Canonical Python import is `cpd`; this module exists so users who try
 from cpd import (
     Binseg,
     Bocpd,
+    BuildInfo,
     Cusum,
     Diagnostics,
     Fpop,
@@ -25,6 +26,7 @@ from cpd import (
 __all__ = [
     "__version__",
     "PruningStats",
+    "BuildInfo",
     "SegmentStats",
     "Diagnostics",
     "OfflineChangePointResult",

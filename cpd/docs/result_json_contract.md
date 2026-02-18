@@ -42,6 +42,28 @@ Optional diagnostics fields:
 - `engine_version`, `runtime_ms`, `notes`, `warnings`, `seed`, `thread_count`
 - `blas_backend`, `cpu_features`, `params_json`, `pruning_stats`
 - `missing_policy_applied`, `missing_fraction`, `effective_sample_count`
+- `build` (optional build provenance object; omitted when unavailable)
+
+### `diagnostics.build` Provenance Object
+
+The optional `diagnostics.build` object carries compile-time provenance plus
+adapter-level context.
+
+Known keys:
+
+- `git_sha`: commit SHA captured at build time (best effort)
+- `git_dirty`: whether tracked files were dirty at build time (best effort)
+- `rustc_version`: compiler version string
+- `target_triple`: Rust target triple
+- `profile`: Cargo profile (`debug`, `release`, etc.)
+- `features`: adapter/runtime feature flags enabled in the build
+- `abi`: adapter ABI context when relevant (for Python wheels, `pyo3-abi3-py39`)
+
+Omission semantics:
+
+- Writers MUST omit `diagnostics.build` when no provenance is available.
+- Writers MUST omit missing keys inside `diagnostics.build` rather than emitting
+  explicit `null` values.
 
 ## Backward/Forward Compatibility Expectations
 
@@ -53,6 +75,16 @@ Optional diagnostics fields:
   round-trip APIs are available.
 - Removing or renaming required fields requires a schema migration and fixture
   updates.
+
+### Additive v2 Strategy (Step 8.2)
+
+- The canonical published schema remains
+  `cpd/schemas/result/offline_change_point_result.v1.schema.json`.
+- Additive `schema_version=2` payloads are currently validated against the v1
+  canonical schema plus additive-compatibility rules (`additionalProperties:
+  true` for extension points).
+- A separate `v2` schema file is only introduced when additive fields need
+  stricter validation than the v1 additive policy can provide.
 
 When bumping schema versions:
 

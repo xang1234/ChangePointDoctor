@@ -8,6 +8,84 @@ use std::borrow::Cow;
 /// Diagnostics schema version for change-point run metadata.
 pub const DIAGNOSTICS_SCHEMA_VERSION: u32 = 1;
 
+/// Build provenance captured at compile time and optionally enriched by adapters.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct BuildInfo {
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub git_sha: Option<String>,
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub git_dirty: Option<bool>,
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub rustc_version: Option<String>,
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub target_triple: Option<String>,
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub profile: Option<String>,
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub features: Option<Vec<String>>,
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub abi: Option<String>,
+}
+
+impl BuildInfo {
+    pub fn from_compile_time_env() -> Option<Self> {
+        let build = Self {
+            git_sha: option_env!("CPD_BUILD_GIT_SHA")
+                .map(ToString::to_string)
+                .filter(|value| !value.trim().is_empty()),
+            git_dirty: option_env!("CPD_BUILD_GIT_DIRTY").and_then(|value| match value {
+                "true" => Some(true),
+                "false" => Some(false),
+                _ => None,
+            }),
+            rustc_version: option_env!("CPD_BUILD_RUSTC_VERSION")
+                .map(ToString::to_string)
+                .filter(|value| !value.trim().is_empty()),
+            target_triple: option_env!("CPD_BUILD_TARGET_TRIPLE")
+                .map(ToString::to_string)
+                .filter(|value| !value.trim().is_empty()),
+            profile: option_env!("CPD_BUILD_PROFILE")
+                .map(ToString::to_string)
+                .filter(|value| !value.trim().is_empty()),
+            features: None,
+            abi: None,
+        };
+        if build.is_empty() { None } else { Some(build) }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.git_sha.is_none()
+            && self.git_dirty.is_none()
+            && self.rustc_version.is_none()
+            && self.target_triple.is_none()
+            && self.profile.is_none()
+            && self.features.is_none()
+            && self.abi.is_none()
+    }
+}
+
 /// Counters that summarize pruning effectiveness during a run.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -34,6 +112,11 @@ pub struct Diagnostics {
     pub thread_count: Option<usize>,
     pub blas_backend: Option<String>,
     pub cpu_features: Option<Vec<String>>,
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub build: Option<BuildInfo>,
     #[cfg(feature = "serde")]
     pub params_json: Option<serde_json::Value>,
     pub pruning_stats: Option<PruningStats>,
@@ -59,6 +142,7 @@ impl Default for Diagnostics {
             thread_count: None,
             blas_backend: None,
             cpu_features: None,
+            build: BuildInfo::from_compile_time_env(),
             #[cfg(feature = "serde")]
             params_json: None,
             pruning_stats: None,
@@ -69,9 +153,42 @@ impl Default for Diagnostics {
     }
 }
 
+fn normalized_features(features: Option<Vec<String>>) -> Option<Vec<String>> {
+    let mut features = features?;
+    features.retain(|feature| !feature.trim().is_empty());
+    if features.is_empty() {
+        return None;
+    }
+    features.sort_unstable();
+    features.dedup();
+    Some(features)
+}
+
+/// Ensures diagnostics carry build provenance and adapter context when available.
+pub fn enrich_diagnostics_build(
+    diagnostics: &mut Diagnostics,
+    features: Option<Vec<String>>,
+    abi: Option<String>,
+) {
+    let mut build = diagnostics
+        .build
+        .take()
+        .or_else(BuildInfo::from_compile_time_env)
+        .unwrap_or_default();
+
+    if let Some(features) = normalized_features(features) {
+        build.features = Some(features);
+    }
+    if let Some(abi) = abi.filter(|value| !value.trim().is_empty()) {
+        build.abi = Some(abi);
+    }
+
+    diagnostics.build = if build.is_empty() { None } else { Some(build) };
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{DIAGNOSTICS_SCHEMA_VERSION, Diagnostics, PruningStats};
+    use super::{DIAGNOSTICS_SCHEMA_VERSION, Diagnostics, PruningStats, enrich_diagnostics_build};
     use crate::ReproMode;
     use std::borrow::Cow;
 
@@ -104,6 +221,35 @@ mod tests {
         assert!(diagnostics.missing_policy_applied.is_none());
         assert!(diagnostics.missing_fraction.is_none());
         assert!(diagnostics.effective_sample_count.is_none());
+        if let Some(build) = diagnostics.build {
+            assert!(!build.is_empty());
+        }
+    }
+
+    #[test]
+    fn enrich_build_context_adds_features_and_abi() {
+        let mut diagnostics = Diagnostics::default();
+        diagnostics.build = None;
+        enrich_diagnostics_build(
+            &mut diagnostics,
+            Some(vec![
+                "serde".to_string(),
+                "".to_string(),
+                "serde".to_string(),
+                "preprocess".to_string(),
+            ]),
+            Some("abi3-py39".to_string()),
+        );
+
+        let build = diagnostics
+            .build
+            .as_ref()
+            .expect("adapter context should create build info");
+        assert_eq!(
+            build.features.as_ref(),
+            Some(&vec!["preprocess".to_string(), "serde".to_string()])
+        );
+        assert_eq!(build.abi.as_deref(), Some("abi3-py39"));
     }
 
     #[test]
@@ -136,6 +282,15 @@ mod tests {
             thread_count: Some(8),
             blas_backend: Some("openblas".to_string()),
             cpu_features: Some(vec!["avx2".to_string(), "fma".to_string()]),
+            build: Some(super::BuildInfo {
+                git_sha: Some("abc123".to_string()),
+                git_dirty: Some(false),
+                rustc_version: Some("rustc 1.85.0".to_string()),
+                target_triple: Some("x86_64-unknown-linux-gnu".to_string()),
+                profile: Some("release".to_string()),
+                features: Some(vec!["serde".to_string()]),
+                abi: Some("abi3-py39".to_string()),
+            }),
             params_json: Some(serde_json::json!({
                 "jump": 5,
                 "min_segment_len": 20
@@ -153,6 +308,16 @@ mod tests {
         let decoded: Diagnostics =
             serde_json::from_str(&encoded).expect("diagnostics should deserialize");
         assert_eq!(decoded, diagnostics);
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn diagnostics_serialization_omits_build_when_absent() {
+        let mut diagnostics = Diagnostics::default();
+        diagnostics.build = None;
+        let encoded =
+            serde_json::to_value(&diagnostics).expect("diagnostics should serialize to value");
+        assert!(encoded.get("build").is_none());
     }
 
     #[cfg(feature = "serde")]

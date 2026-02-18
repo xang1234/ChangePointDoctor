@@ -182,6 +182,23 @@ def test_detector_outputs_roundtrip_through_result_json_api() -> None:
         assert decoded["diagnostics"]["schema_version"] >= 1
 
 
+def test_detect_offline_exposes_build_provenance_context() -> None:
+    result = cpd.detect_offline(
+        _three_regime_signal(),
+        detector="pelt",
+        cost="l2",
+        constraints={"min_segment_len": 2},
+        stopping={"n_bkps": 2},
+        repro_mode="balanced",
+    )
+
+    build = result.diagnostics.build
+    assert build is not None
+    assert build.abi == "pyo3-abi3-py39"
+    assert build.features is not None
+    assert "serde" in build.features
+
+
 @pytest.mark.parametrize(
     ("fixture_name", "expected_schema_version"),
     [

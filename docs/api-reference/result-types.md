@@ -22,6 +22,7 @@ Serialize the result to a JSON string following the versioned contract.
 
 - Current writer version: schema marker `1`
 - Unknown fields are preserved during round-trip
+- Optional build provenance is surfaced under `diagnostics.build` when available
 
 #### `from_json(payload: str) -> OfflineChangePointResult` (static)
 

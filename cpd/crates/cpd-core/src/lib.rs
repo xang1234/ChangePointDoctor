@@ -24,7 +24,9 @@ pub use constraints::{
 };
 pub use control::{BudgetMode, BudgetStatus, CancelToken};
 pub use detectors::{OfflineDetector, OnlineDetector, OnlineStepResult};
-pub use diagnostics::{DIAGNOSTICS_SCHEMA_VERSION, Diagnostics, PruningStats};
+pub use diagnostics::{
+    BuildInfo, DIAGNOSTICS_SCHEMA_VERSION, Diagnostics, PruningStats, enrich_diagnostics_build,
+};
 pub use error::CpdError;
 pub use execution_context::ExecutionContext;
 pub use missing::{

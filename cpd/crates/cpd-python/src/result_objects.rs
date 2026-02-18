@@ -7,10 +7,10 @@ use crate::error_map::cpd_error_to_pyerr;
 #[cfg(feature = "serde")]
 use cpd_core::OfflineChangePointResultWire;
 use cpd_core::{
-    DIAGNOSTICS_SCHEMA_VERSION, Diagnostics as CoreDiagnostics,
+    BuildInfo as CoreBuildInfo, DIAGNOSTICS_SCHEMA_VERSION, Diagnostics as CoreDiagnostics,
     OfflineChangePointResult as CoreOfflineChangePointResult,
     OnlineStepResult as CoreOnlineStepResult, PruningStats as CorePruningStats, ReproMode,
-    SegmentStats as CoreSegmentStats,
+    SegmentStats as CoreSegmentStats, enrich_diagnostics_build,
 };
 #[cfg(not(feature = "serde"))]
 use pyo3::exceptions::PyNotImplementedError;
@@ -38,6 +38,52 @@ fn repro_mode_from_str(value: &str) -> ReproMode {
         "fast" | "Fast" => ReproMode::Fast,
         _ => ReproMode::Balanced,
     }
+}
+
+fn python_adapter_features() -> Vec<String> {
+    let mut features = Vec::new();
+    if cfg!(feature = "extension-module") {
+        features.push("extension-module".to_string());
+    }
+    if cfg!(feature = "serde") {
+        features.push("serde".to_string());
+    }
+    if cfg!(feature = "rayon") {
+        features.push("rayon".to_string());
+    }
+    if cfg!(feature = "tracing") {
+        features.push("tracing".to_string());
+    }
+    if cfg!(feature = "simd") {
+        features.push("simd".to_string());
+    }
+    if cfg!(feature = "kernel") {
+        features.push("kernel".to_string());
+    }
+    if cfg!(feature = "kernel-approx") {
+        features.push("kernel-approx".to_string());
+    }
+    if cfg!(feature = "blas") {
+        features.push("blas".to_string());
+    }
+    if cfg!(feature = "gp") {
+        features.push("gp".to_string());
+    }
+    if cfg!(feature = "preprocess") {
+        features.push("preprocess".to_string());
+    }
+    if cfg!(feature = "repro-strict") {
+        features.push("repro-strict".to_string());
+    }
+    features
+}
+
+pub(crate) fn attach_python_adapter_build_context(diagnostics: &mut CoreDiagnostics) {
+    enrich_diagnostics_build(
+        diagnostics,
+        Some(python_adapter_features()),
+        Some("pyo3-abi3-py39".to_string()),
+    );
 }
 
 fn derive_change_points(n: usize, breakpoints: &[usize]) -> Vec<usize> {
@@ -116,6 +162,92 @@ impl PyPruningStats {
             "PruningStats(candidates_considered={}, candidates_pruned={})",
             self.candidates_considered, self.candidates_pruned
         )
+    }
+}
+
+#[pyclass(module = "cpd._cpd_rs", name = "BuildInfo", frozen)]
+#[derive(Clone, Debug)]
+pub struct PyBuildInfo {
+    git_sha: Option<String>,
+    git_dirty: Option<bool>,
+    rustc_version: Option<String>,
+    target_triple: Option<String>,
+    profile: Option<String>,
+    features: Option<Vec<String>>,
+    abi: Option<String>,
+}
+
+#[pymethods]
+impl PyBuildInfo {
+    #[getter]
+    fn git_sha(&self) -> Option<String> {
+        self.git_sha.clone()
+    }
+
+    #[getter]
+    fn git_dirty(&self) -> Option<bool> {
+        self.git_dirty
+    }
+
+    #[getter]
+    fn rustc_version(&self) -> Option<String> {
+        self.rustc_version.clone()
+    }
+
+    #[getter]
+    fn target_triple(&self) -> Option<String> {
+        self.target_triple.clone()
+    }
+
+    #[getter]
+    fn profile(&self) -> Option<String> {
+        self.profile.clone()
+    }
+
+    #[getter]
+    fn features(&self) -> Option<Vec<String>> {
+        self.features.clone()
+    }
+
+    #[getter]
+    fn abi(&self) -> Option<String> {
+        self.abi.clone()
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "BuildInfo(git_sha={:?}, target_triple={:?}, profile={:?}, abi={:?})",
+            self.git_sha, self.target_triple, self.profile, self.abi
+        )
+    }
+}
+
+impl From<CoreBuildInfo> for PyBuildInfo {
+    fn from(build: CoreBuildInfo) -> Self {
+        Self {
+            git_sha: build.git_sha,
+            git_dirty: build.git_dirty,
+            rustc_version: build.rustc_version,
+            target_triple: build.target_triple,
+            profile: build.profile,
+            features: build.features,
+            abi: build.abi,
+        }
+    }
+}
+
+impl PyBuildInfo {
+    #[cfg(feature = "serde")]
+    fn to_core(&self) -> CoreBuildInfo {
+        CoreBuildInfo {
+            git_sha: self.git_sha.clone(),
+            git_dirty: self.git_dirty,
+            rustc_version: self.rustc_version.clone(),
+            target_triple: self.target_triple.clone(),
+            profile: self.profile.clone(),
+            features: self.features.clone(),
+            abi: self.abi.clone(),
+        }
     }
 }
 
@@ -233,6 +365,7 @@ pub struct PyDiagnostics {
     thread_count: Option<usize>,
     blas_backend: Option<String>,
     cpu_features: Option<Vec<String>>,
+    build: Option<PyBuildInfo>,
     #[cfg_attr(not(feature = "serde"), allow(dead_code))]
     params_json_text: Option<String>,
     pruning_stats: Option<PyPruningStats>,
@@ -314,6 +447,14 @@ impl PyDiagnostics {
     }
 
     #[getter]
+    fn build<'py>(&self, py: Python<'py>) -> PyResult<Option<Py<PyBuildInfo>>> {
+        self.build
+            .clone()
+            .map(|build| Py::new(py, build))
+            .transpose()
+    }
+
+    #[getter]
     fn params_json<'py>(&self, py: Python<'py>) -> PyResult<PyObject> {
         #[cfg(feature = "serde")]
         if let Some(serialized) = &self.params_json_text {
@@ -390,6 +531,7 @@ impl From<CoreDiagnostics> for PyDiagnostics {
             thread_count: diagnostics.thread_count,
             blas_backend: diagnostics.blas_backend,
             cpu_features: diagnostics.cpu_features,
+            build: diagnostics.build.map(Into::into),
             params_json_text,
             pruning_stats: diagnostics.pruning_stats.map(Into::into),
             missing_policy_applied: diagnostics.missing_policy_applied,
@@ -424,6 +566,7 @@ impl PyDiagnostics {
             thread_count: self.thread_count,
             blas_backend: self.blas_backend.clone(),
             cpu_features: self.cpu_features.clone(),
+            build: self.build.as_ref().map(PyBuildInfo::to_core),
             params_json,
             pruning_stats: self.pruning_stats.as_ref().map(PyPruningStats::to_core),
             missing_policy_applied: self.missing_policy_applied.clone(),
@@ -867,7 +1010,7 @@ mod tests {
         PySegmentStats, repro_mode_to_str,
     };
     use cpd_core::{
-        DIAGNOSTICS_SCHEMA_VERSION, Diagnostics as CoreDiagnostics,
+        BuildInfo as CoreBuildInfo, DIAGNOSTICS_SCHEMA_VERSION, Diagnostics as CoreDiagnostics,
         OfflineChangePointResult as CoreOfflineChangePointResult,
         OnlineStepResult as CoreOnlineStepResult, PruningStats as CorePruningStats, ReproMode,
         SegmentStats as CoreSegmentStats,
@@ -926,6 +1069,7 @@ mod tests {
         diagnostics.thread_count = Some(4);
         diagnostics.blas_backend = Some("openblas".to_string());
         diagnostics.cpu_features = Some(vec!["avx2".to_string(), "fma".to_string()]);
+        diagnostics.build = None;
         #[cfg(feature = "serde")]
         {
             diagnostics.params_json = Some(serde_json::json!({
@@ -995,6 +1139,7 @@ mod tests {
         diagnostics.thread_count = None;
         diagnostics.blas_backend = None;
         diagnostics.cpu_features = None;
+        diagnostics.build = None;
         diagnostics.pruning_stats = None;
         diagnostics.missing_policy_applied = None;
         diagnostics.missing_fraction = None;
@@ -1041,6 +1186,7 @@ mod tests {
         diagnostics.thread_count = None;
         diagnostics.blas_backend = None;
         diagnostics.cpu_features = None;
+        diagnostics.build = None;
         diagnostics.pruning_stats = None;
         diagnostics.missing_policy_applied = None;
         diagnostics.missing_fraction = None;
@@ -1330,6 +1476,7 @@ mod tests {
             assert_eq!(decoded.diagnostics.algorithm, "pelt");
             assert_eq!(decoded.diagnostics.cost_model, "l2_mean");
             assert!(decoded.diagnostics.pruning_stats.is_some());
+            assert!(decoded.diagnostics.build.is_none());
             assert_eq!(
                 decoded.diagnostics.params_json,
                 Some(serde_json::json!({
@@ -1829,6 +1976,15 @@ finally:
         diagnostics_core.thread_count = None;
         diagnostics_core.blas_backend = None;
         diagnostics_core.cpu_features = None;
+        diagnostics_core.build = Some(CoreBuildInfo {
+            git_sha: Some("abc123".to_string()),
+            git_dirty: Some(false),
+            rustc_version: Some("rustc 1.85.0".to_string()),
+            target_triple: Some("x86_64-unknown-linux-gnu".to_string()),
+            profile: Some("release".to_string()),
+            features: Some(vec!["serde".to_string(), "preprocess".to_string()]),
+            abi: Some("pyo3-abi3-py39".to_string()),
+        });
         diagnostics_core.pruning_stats = None;
         diagnostics_core.missing_policy_applied = None;
         diagnostics_core.missing_fraction = None;
@@ -1836,5 +1992,11 @@ finally:
         let diagnostics = PyDiagnostics::from(diagnostics_core);
         assert_eq!(diagnostics.algorithm, "binseg");
         assert_eq!(diagnostics.repro_mode, "fast");
+        let build = diagnostics.build.expect("build metadata should roundtrip");
+        assert_eq!(build.abi.as_deref(), Some("pyo3-abi3-py39"));
+        assert_eq!(
+            build.features,
+            Some(vec!["serde".to_string(), "preprocess".to_string()])
+        );
     }
 }
