@@ -110,6 +110,7 @@ def _parse_case(raw_case: dict[str, Any], index: int) -> BocpdParityCase:
         raise ManifestValidationError(
             f"case {case_id!r} has unsupported signal_spec.kind {kind!r}"
         )
+    signal_n = _signal_length_from_spec(signal_spec)
 
     mean_run_length = raw_case["hazard_mean_run_length"]
     if not isinstance(mean_run_length, (int, float)) or not math.isfinite(mean_run_length):
@@ -139,6 +140,10 @@ def _parse_case(raw_case: dict[str, Any], index: int) -> BocpdParityCase:
     if tuple(sorted(set(cps))) != cps:
         raise ManifestValidationError(
             f"case {case_id!r} target_change_points must be strictly increasing and unique"
+        )
+    if any(point >= signal_n for point in cps):
+        raise ManifestValidationError(
+            f"case {case_id!r} target_change_points must be < signal length ({signal_n})"
         )
 
     tolerance = raw_case["tolerance"]
@@ -170,6 +175,30 @@ def _parse_case(raw_case: dict[str, Any], index: int) -> BocpdParityCase:
         tolerance_index=tolerance_index,
         profile_tags=profiles,
     )
+
+
+def _signal_length_from_spec(signal_spec: dict[str, Any]) -> int:
+    segments = signal_spec.get("segments")
+    if not isinstance(segments, list) or not segments:
+        raise ManifestValidationError("signal_spec.segments must be a non-empty list")
+
+    total = 0
+    for idx, segment in enumerate(segments):
+        if not isinstance(segment, dict):
+            raise ManifestValidationError(f"signal_spec.segments[{idx}] must be an object")
+        try:
+            length = int(segment["length"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ManifestValidationError(
+                f"signal_spec.segments[{idx}].length must be an integer"
+            ) from exc
+        if length <= 0:
+            raise ManifestValidationError(
+                f"signal_spec.segments[{idx}].length must be > 0"
+            )
+        total += length
+
+    return total
 
 
 def category_counts(cases: list[BocpdParityCase]) -> dict[str, int]:
@@ -308,15 +337,33 @@ def _normalize_reference_p_change(raw: Any, n_samples: int) -> np.ndarray:
     if matrix_like.ndim != 2:
         raise ValueError(f"unsupported reference output ndim={matrix_like.ndim}")
 
-    row0 = np.asarray(matrix_like[0, :], dtype=np.float64)
-    col0 = np.asarray(matrix_like[:, 0], dtype=np.float64)
-    row_fit = _fit_vector_length(row0, n_samples=n_samples)
-    col_fit = _fit_vector_length(col0, n_samples=n_samples)
+    matrix = np.asarray(matrix_like, dtype=np.float64)
+    if not np.isfinite(matrix).all():
+        raise ValueError("reference run-length matrix must be finite")
 
-    row_dynamic = float(np.max(row_fit) - np.min(row_fit))
-    col_dynamic = float(np.max(col_fit) - np.min(col_fit))
-    selected = row_fit if row_dynamic >= col_dynamic else col_fit
+    # Choose orientation using BOCPD posterior mass conservation.
+    # If run-length is axis 0, per-time mass is sum(axis=0) ~= 1.
+    # If run-length is axis 1, per-time mass is sum(axis=1) ~= 1.
+    col_mass_residual = _posterior_mass_residual(matrix, axis=0)
+    row_mass_residual = _posterior_mass_residual(matrix, axis=1)
+    if abs(col_mass_residual - row_mass_residual) <= 1e-8:
+        raise ValueError(
+            "ambiguous reference run-length orientation; posterior-mass residuals are equal"
+        )
+    if col_mass_residual < row_mass_residual:
+        selected = _fit_vector_length(matrix[0, :], n_samples=n_samples)
+    else:
+        selected = _fit_vector_length(matrix[:, 0], n_samples=n_samples)
     return np.clip(selected, 0.0, 1.0)
+
+
+def _posterior_mass_residual(matrix: np.ndarray, axis: int) -> float:
+    mass = np.sum(matrix, axis=axis)
+    if mass.shape[0] > 1:
+        mass = mass[1:]
+    if mass.shape[0] == 0:
+        return float("inf")
+    return float(np.mean(np.abs(mass - 1.0)))
 
 
 def _fit_vector_length(vector: np.ndarray, n_samples: int) -> np.ndarray:
@@ -347,7 +394,11 @@ def extract_top_k_change_points(
         return ()
     values = np.asarray(p_change, dtype=np.float64).reshape(-1)
     n = values.shape[0]
+    if n == 0:
+        return ()
     start = max(0, min(n, int(warmup_skip)))
+    if start >= n:
+        start = 0
 
     candidates: list[int] = []
     for idx in range(start, n):

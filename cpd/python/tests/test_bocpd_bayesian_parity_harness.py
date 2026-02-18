@@ -67,6 +67,18 @@ def test_manifest_rejects_invalid_target_change_points(tmp_path: Path) -> None:
         bh.load_manifest(path)
 
 
+def test_manifest_rejects_target_change_points_out_of_signal_bounds(tmp_path: Path) -> None:
+    bad = _base_case("bad_cp_bounds")
+    bad["target_change_points"] = [10, 20]
+    path = tmp_path / "manifest.json"
+    path.write_text(json.dumps({"manifest_version": 1, "cases": [bad]}), encoding="utf-8")
+
+    with pytest.raises(
+        bh.ManifestValidationError, match="target_change_points must be < signal length"
+    ):
+        bh.load_manifest(path)
+
+
 def test_signal_generation_is_deterministic() -> None:
     cases = bh.load_manifest(MANIFEST_PATH)
     case = next(c for c in cases if c.id == "step_single_01")
@@ -82,6 +94,12 @@ def test_peak_extraction_enforces_min_separation() -> None:
         p_change, k=2, warmup_skip=0, min_separation=3
     )
     assert peaks == (3, 7)
+
+
+def test_peak_extraction_handles_short_series_with_large_warmup() -> None:
+    p_change = np.asarray([0.2, 0.9, 0.1], dtype=np.float64)
+    peaks = bh.extract_top_k_change_points(p_change, k=1, warmup_skip=10, min_separation=8)
+    assert peaks == (1,)
 
 
 def test_tolerance_and_jaccard_behavior() -> None:
@@ -102,11 +120,14 @@ def test_reference_adapter_normalizes_run_length_matrix(monkeypatch: pytest.Monk
         def online_changepoint_detection(
             values: np.ndarray, hazard, observation
         ) -> tuple[np.ndarray, np.ndarray]:
-            _ = hazard(np.arange(4))
+            _ = hazard(np.arange(values.shape[0] + 1, dtype=np.float64))
             _ = observation
             n = values.shape[0]
             run_length = np.zeros((n + 1, n + 1), dtype=np.float64)
-            run_length[0, 1:] = np.linspace(0.1, 0.9, n, dtype=np.float64)
+            cp = np.linspace(0.1, 0.9, n, dtype=np.float64)
+            run_length[0, 0] = 1.0
+            run_length[0, 1:] = cp
+            run_length[1, 1:] = 1.0 - cp
             return run_length, np.zeros(n, dtype=np.float64)
 
     class _FakeHazardFunctions:
