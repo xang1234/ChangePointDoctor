@@ -911,34 +911,35 @@ mod tests {
     }
 
     fn sample_core_result() -> CoreOfflineChangePointResult {
-        let diagnostics = CoreDiagnostics {
-            n: 100,
-            d: 2,
-            schema_version: 0,
-            engine_version: None,
-            runtime_ms: Some(123),
-            notes: vec!["run complete".to_string()],
-            warnings: vec!["none".to_string()],
-            algorithm: Cow::Owned("pelt".to_string()),
-            cost_model: Cow::Owned("l2_mean".to_string()),
-            seed: Some(7),
-            repro_mode: ReproMode::Balanced,
-            thread_count: Some(4),
-            blas_backend: Some("openblas".to_string()),
-            cpu_features: Some(vec!["avx2".to_string(), "fma".to_string()]),
-            #[cfg(feature = "serde")]
-            params_json: Some(serde_json::json!({
+        let mut diagnostics = CoreDiagnostics::default();
+        diagnostics.n = 100;
+        diagnostics.d = 2;
+        diagnostics.schema_version = 0;
+        diagnostics.engine_version = None;
+        diagnostics.runtime_ms = Some(123);
+        diagnostics.notes = vec!["run complete".to_string()];
+        diagnostics.warnings = vec!["none".to_string()];
+        diagnostics.algorithm = Cow::Owned("pelt".to_string());
+        diagnostics.cost_model = Cow::Owned("l2_mean".to_string());
+        diagnostics.seed = Some(7);
+        diagnostics.repro_mode = ReproMode::Balanced;
+        diagnostics.thread_count = Some(4);
+        diagnostics.blas_backend = Some("openblas".to_string());
+        diagnostics.cpu_features = Some(vec!["avx2".to_string(), "fma".to_string()]);
+        #[cfg(feature = "serde")]
+        {
+            diagnostics.params_json = Some(serde_json::json!({
                 "jump": 5,
                 "min_segment_len": 10
-            })),
-            pruning_stats: Some(CorePruningStats {
-                candidates_considered: 150,
-                candidates_pruned: 120,
-            }),
-            missing_policy_applied: Some("Ignore".to_string()),
-            missing_fraction: Some(0.1),
-            effective_sample_count: Some(90),
-        };
+            }));
+        }
+        diagnostics.pruning_stats = Some(CorePruningStats {
+            candidates_considered: 150,
+            candidates_pruned: 120,
+        });
+        diagnostics.missing_policy_applied = Some("Ignore".to_string());
+        diagnostics.missing_fraction = Some(0.1);
+        diagnostics.effective_sample_count = Some(90);
 
         CoreOfflineChangePointResult {
             breakpoints: vec![40, 100],
@@ -979,28 +980,25 @@ mod tests {
     }
 
     fn sample_univariate_result() -> CoreOfflineChangePointResult {
-        let diagnostics = CoreDiagnostics {
-            n: 100,
-            d: 1,
-            schema_version: DIAGNOSTICS_SCHEMA_VERSION,
-            engine_version: Some("test-engine".to_string()),
-            runtime_ms: Some(5),
-            notes: vec!["summary-only".to_string()],
-            warnings: vec![],
-            algorithm: Cow::Owned("pelt".to_string()),
-            cost_model: Cow::Owned("l2".to_string()),
-            seed: Some(3),
-            repro_mode: ReproMode::Balanced,
-            thread_count: None,
-            blas_backend: None,
-            cpu_features: None,
-            #[cfg(feature = "serde")]
-            params_json: None,
-            pruning_stats: None,
-            missing_policy_applied: None,
-            missing_fraction: None,
-            effective_sample_count: None,
-        };
+        let mut diagnostics = CoreDiagnostics::default();
+        diagnostics.n = 100;
+        diagnostics.d = 1;
+        diagnostics.schema_version = DIAGNOSTICS_SCHEMA_VERSION;
+        diagnostics.engine_version = Some("test-engine".to_string());
+        diagnostics.runtime_ms = Some(5);
+        diagnostics.notes = vec!["summary-only".to_string()];
+        diagnostics.warnings = vec![];
+        diagnostics.algorithm = Cow::Owned("pelt".to_string());
+        diagnostics.cost_model = Cow::Owned("l2".to_string());
+        diagnostics.seed = Some(3);
+        diagnostics.repro_mode = ReproMode::Balanced;
+        diagnostics.thread_count = None;
+        diagnostics.blas_backend = None;
+        diagnostics.cpu_features = None;
+        diagnostics.pruning_stats = None;
+        diagnostics.missing_policy_applied = None;
+        diagnostics.missing_fraction = None;
+        diagnostics.effective_sample_count = None;
         CoreOfflineChangePointResult {
             breakpoints: vec![50, 100],
             change_points: vec![50],
@@ -1028,28 +1026,25 @@ mod tests {
     }
 
     fn sample_empty_univariate_result() -> CoreOfflineChangePointResult {
-        let diagnostics = CoreDiagnostics {
-            n: 0,
-            d: 1,
-            schema_version: DIAGNOSTICS_SCHEMA_VERSION,
-            engine_version: Some("test-engine".to_string()),
-            runtime_ms: Some(0),
-            notes: vec!["empty".to_string()],
-            warnings: vec![],
-            algorithm: Cow::Owned("pelt".to_string()),
-            cost_model: Cow::Owned("l2".to_string()),
-            seed: None,
-            repro_mode: ReproMode::Balanced,
-            thread_count: None,
-            blas_backend: None,
-            cpu_features: None,
-            #[cfg(feature = "serde")]
-            params_json: None,
-            pruning_stats: None,
-            missing_policy_applied: None,
-            missing_fraction: None,
-            effective_sample_count: Some(0),
-        };
+        let mut diagnostics = CoreDiagnostics::default();
+        diagnostics.n = 0;
+        diagnostics.d = 1;
+        diagnostics.schema_version = DIAGNOSTICS_SCHEMA_VERSION;
+        diagnostics.engine_version = Some("test-engine".to_string());
+        diagnostics.runtime_ms = Some(0);
+        diagnostics.notes = vec!["empty".to_string()];
+        diagnostics.warnings = vec![];
+        diagnostics.algorithm = Cow::Owned("pelt".to_string());
+        diagnostics.cost_model = Cow::Owned("l2".to_string());
+        diagnostics.seed = None;
+        diagnostics.repro_mode = ReproMode::Balanced;
+        diagnostics.thread_count = None;
+        diagnostics.blas_backend = None;
+        diagnostics.cpu_features = None;
+        diagnostics.pruning_stats = None;
+        diagnostics.missing_policy_applied = None;
+        diagnostics.missing_fraction = None;
+        diagnostics.effective_sample_count = Some(0);
         CoreOfflineChangePointResult {
             breakpoints: vec![],
             change_points: vec![],
@@ -1819,28 +1814,26 @@ finally:
         assert_eq!(segment.start, 0);
         assert_eq!(segment.end, 5);
 
-        let diagnostics = PyDiagnostics::from(CoreDiagnostics {
-            n: 5,
-            d: 1,
-            schema_version: DIAGNOSTICS_SCHEMA_VERSION,
-            engine_version: Some("x.y.z".to_string()),
-            runtime_ms: Some(1),
-            notes: vec![],
-            warnings: vec![],
-            algorithm: Cow::Borrowed("binseg"),
-            cost_model: Cow::Borrowed("normal_mean_var"),
-            seed: None,
-            repro_mode: ReproMode::Fast,
-            thread_count: None,
-            blas_backend: None,
-            cpu_features: None,
-            #[cfg(feature = "serde")]
-            params_json: None,
-            pruning_stats: None,
-            missing_policy_applied: None,
-            missing_fraction: None,
-            effective_sample_count: None,
-        });
+        let mut diagnostics_core = CoreDiagnostics::default();
+        diagnostics_core.n = 5;
+        diagnostics_core.d = 1;
+        diagnostics_core.schema_version = DIAGNOSTICS_SCHEMA_VERSION;
+        diagnostics_core.engine_version = Some("x.y.z".to_string());
+        diagnostics_core.runtime_ms = Some(1);
+        diagnostics_core.notes = vec![];
+        diagnostics_core.warnings = vec![];
+        diagnostics_core.algorithm = Cow::Borrowed("binseg");
+        diagnostics_core.cost_model = Cow::Borrowed("normal_mean_var");
+        diagnostics_core.seed = None;
+        diagnostics_core.repro_mode = ReproMode::Fast;
+        diagnostics_core.thread_count = None;
+        diagnostics_core.blas_backend = None;
+        diagnostics_core.cpu_features = None;
+        diagnostics_core.pruning_stats = None;
+        diagnostics_core.missing_policy_applied = None;
+        diagnostics_core.missing_fraction = None;
+        diagnostics_core.effective_sample_count = None;
+        let diagnostics = PyDiagnostics::from(diagnostics_core);
         assert_eq!(diagnostics.algorithm, "binseg");
         assert_eq!(diagnostics.repro_mode, "fast");
     }

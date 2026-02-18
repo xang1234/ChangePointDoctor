@@ -1919,6 +1919,9 @@ pub fn fuzz_detect_offline_numpy_case(
     let cost = PyCostModel::parse(cost)?;
     let parsed = parse_numpy_series(py, x, time, MissingPolicy::Error, DTypePolicy::KeepInput)?;
     let owned = parsed.into_owned().map_err(cpd_error_to_pyerr)?;
+    if owned.n_samples() == 0 {
+        return Ok(());
+    }
 
     let stopping = match pen {
         Some(beta) if beta.is_finite() && beta > 0.0 => Stopping::Penalized(Penalty::Manual(beta)),
