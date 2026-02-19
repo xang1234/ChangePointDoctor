@@ -28,13 +28,18 @@ Issues = "https://github.com/xang1234/changepoint-doctor/issues"
 
 [project.optional-dependencies]
 plot = ["matplotlib>=3.7"]
-notebooks = ["jupyterlab>=4.0", "matplotlib>=3.7"]
-parity = ["pytest>=8.0", "ruptures>=1.1.9"]
+notebooks = ["jupyterlab>=4.0", "ipykernel>=6.0", "matplotlib>=3.7"]
+parity = ["ruptures>=1.1.9"]
 dev = [
   "maturin>=1.7",
   "pytest>=8.0",
+  "pytest-cov>=5.0",
+  "ruff>=0.6",
+  "mypy>=1.10",
+  "pre-commit>=3.7",
   "jsonschema>=4.0",
   "jupyterlab>=4.0",
+  "ipykernel>=6.0",
   "matplotlib>=3.7",
   "ruptures>=1.1.9",
 ]

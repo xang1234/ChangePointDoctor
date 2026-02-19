@@ -139,10 +139,13 @@ Compatibility + limitations to keep in mind:
 
 ## 6. Run provided examples
 
+If you're already in `cpd/python`, drop the `cpd/python/` prefix.
+
 ```bash
-cpd/python/.venv/bin/python cpd/python/examples/synthetic_signal.py
-cpd/python/.venv/bin/python cpd/python/examples/csv_detect.py --csv /path/to/data.csv --column 0
-cpd/python/.venv/bin/python cpd/python/examples/plot_breakpoints.py --out /tmp/cpd_breakpoints.png
+# From the repository root (recommended):
+python cpd/python/examples/synthetic_signal.py
+python cpd/python/examples/csv_detect.py --csv /path/to/data.csv --column 0
+python cpd/python/examples/plot_breakpoints.py --out /tmp/cpd_breakpoints.png
 ```
 
 Example scripts are exercised in CI/smoke coverage via
