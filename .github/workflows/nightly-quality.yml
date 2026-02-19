@@ -49,9 +49,18 @@ jobs:
         run: python -m pip install --upgrade pip numpy
 
       - name: Run fuzz target for 900 seconds
+        if: ${{ matrix.target != 'numpy_interop_no_panic' }}
         working-directory: cpd/fuzz
         env:
           PYO3_PYTHON: ${{ steps.setup-python.outputs.python-path }}
+        run: cargo fuzz run ${{ matrix.target }} -- -max_total_time=900
+
+      - name: Run NumPy interop fuzz target for 900 seconds (ignore CPython leak reports)
+        if: ${{ matrix.target == 'numpy_interop_no_panic' }}
+        working-directory: cpd/fuzz
+        env:
+          PYO3_PYTHON: ${{ steps.setup-python.outputs.python-path }}
+          ASAN_OPTIONS: detect_leaks=0
         run: cargo fuzz run ${{ matrix.target }} -- -max_total_time=900
 
       - name: Upload fuzz artifacts on failure
@@ -112,6 +121,9 @@ jobs:
           cargo test -p cpd-online --test perf bocpd_gaussian_perf_contract --release -- --exact --nocapture
           cargo test -p cpd-online --test perf cusum_perf_contract --release -- --exact --nocapture
           cargo test -p cpd-online --test perf page_hinkley_perf_contract --release -- --exact --nocapture
+
+      - name: Install NumPy for Rust/PyO3 release tests
+        run: python -m pip install --upgrade pip numpy
 
       - name: Run release-mode workspace tests
         working-directory: cpd
@@ -389,10 +401,15 @@ jobs:
           )
           PY
 
-      - name: Install pinned Bayesian reference dependency
+      - name: Install Bayesian reference dependency (pinned with fallback)
         run: |
-          python -m pip install \
-            "git+https://github.com/hildensia/bayesian_changepoint_detection.git@f3f8f03af0de7f4f98bd54c7ca0b5f6d0b0f6f8c"
+          set -euo pipefail
+          ref_repo="https://github.com/hildensia/bayesian_changepoint_detection.git"
+          preferred_ref="f3f8f03af0de7f4f98bd54c7ca0b5f6d0b0f6f8c"
+          if ! python -m pip install "git+${ref_repo}@${preferred_ref}"; then
+            echo "::warning::Pinned bayesian_changepoint_detection ref ${preferred_ref} is unavailable; falling back to repository default branch."
+            python -m pip install "git+${ref_repo}"
+          fi
 
       - name: Run BOCPD parity harness unit tests
         run: pytest -q tests/test_bocpd_bayesian_parity_harness.py

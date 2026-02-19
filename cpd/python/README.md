@@ -283,12 +283,15 @@ tolerance rules, and CI thresholds.
 ## BOCPD Bayesian Parity Suite
 
 To run BOCPD parity against
-`hildensia/bayesian_changepoint_detection` (pinned reference commit):
+`hildensia/bayesian_changepoint_detection` (preferred pin with fallback):
 
 ```bash
 cd cpd/python
 python -m pip install --upgrade ".[parity]"
-python -m pip install "git+https://github.com/hildensia/bayesian_changepoint_detection.git@f3f8f03af0de7f4f98bd54c7ca0b5f6d0b0f6f8c"
+REF_REPO="https://github.com/hildensia/bayesian_changepoint_detection.git"
+PREFERRED_REF="f3f8f03af0de7f4f98bd54c7ca0b5f6d0b0f6f8c"
+python -m pip install "git+${REF_REPO}@${PREFERRED_REF}" || \
+  python -m pip install "git+${REF_REPO}"
 CPD_BOCPD_PARITY_PROFILE=smoke pytest -q tests/test_bocpd_bayesian_parity.py
 CPD_BOCPD_PARITY_PROFILE=full CPD_BOCPD_PARITY_REPORT_OUT=/tmp/cpd-bocpd-parity-report.json pytest -q tests/test_bocpd_bayesian_parity.py
 ```

@@ -48,6 +48,15 @@ PYO3_PYTHON="$(python -c 'import sys; print(sys.executable)')" \
   cargo fuzz run numpy_interop_no_panic -- -max_total_time=60
 ```
 
+When fuzzing embedded CPython builds under ASan, leak detection can report
+process-lifetime allocations from the Python runtime. Use:
+
+```bash
+ASAN_OPTIONS=detect_leaks=0 \
+PYO3_PYTHON="$(python -c 'import sys; print(sys.executable)')" \
+  cargo fuzz run numpy_interop_no_panic -- -max_total_time=60
+```
+
 ## Corpus and Artifacts
 
 `cargo-fuzz` writes runtime state to:

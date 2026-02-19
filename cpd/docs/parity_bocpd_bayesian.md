@@ -11,8 +11,10 @@ This document defines the BOCPD online parity suite against
 - Maximum state bound: `max_run_length=2000`
 - Reference implementation:
   `https://github.com/hildensia/bayesian_changepoint_detection`
-- Reference pin:
+- Preferred reference pin:
   `f3f8f03af0de7f4f98bd54c7ca0b5f6d0b0f6f8c`
+- Fallback install target when the pin is unavailable upstream:
+  repository default branch (`git+https://github.com/hildensia/bayesian_changepoint_detection.git`)
 
 No runtime API behavior is changed by this suite; this is a differential testing
 contract only.
