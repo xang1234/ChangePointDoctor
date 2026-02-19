@@ -7,11 +7,11 @@ and [`../docs/clean_room_policy.md`](../docs/clean_room_policy.md).
 
 ## Install
 
-From PyPI (target release `0.0.2`):
+From PyPI (target release `0.0.3`):
 
 ```bash
 python -m pip install --upgrade pip
-python -m pip install changepoint-doctor==0.0.2
+python -m pip install changepoint-doctor==0.0.3
 ```
 
 For local development from this repository:
@@ -29,10 +29,10 @@ before debugging `pyo3`/linker errors.
 
 Common extras:
 
-- `plot`: `python -m pip install "changepoint-doctor[plot]==0.0.2"`
-- `notebooks`: `python -m pip install "changepoint-doctor[notebooks]==0.0.2"`
-- `parity`: `python -m pip install "changepoint-doctor[parity]==0.0.2"`
-- `dev`: `python -m pip install "changepoint-doctor[dev]==0.0.2"`
+- `plot`: `python -m pip install "changepoint-doctor[plot]==0.0.3"`
+- `notebooks`: `python -m pip install "changepoint-doctor[notebooks]==0.0.3"`
+- `parity`: `python -m pip install "changepoint-doctor[parity]==0.0.3"`
+- `dev`: `python -m pip install "changepoint-doctor[dev]==0.0.3"`
 
 `plot`/`notebooks`/`parity` extras only install optional Python tooling. They do
 not toggle Rust compile-time features. Rust features are set when building the
@@ -151,7 +151,7 @@ try:
     fig = restored.plot(x, title="Detected breakpoints")
 except ImportError:
     # Plotting remains optional.
-    # Install with: python -m pip install "changepoint-doctor[plot]==0.0.2"
+    # Install with: python -m pip install "changepoint-doctor[plot]==0.0.3"
     fig = None
 ```
 
@@ -262,7 +262,7 @@ cpd/python/.venv/bin/python cpd/python/examples/plot_breakpoints.py --out /tmp/c
 Launch from `cpd/python`:
 
 ```bash
-python -m pip install --upgrade "changepoint-doctor[notebooks]==0.0.2"
+python -m pip install --upgrade "changepoint-doctor[notebooks]==0.0.3"
 jupyter lab
 ```
 
@@ -308,10 +308,10 @@ pytest -q tests/test_optional_extras_contract.py
 Optional install commands (one per workflow extra):
 
 ```bash
-python -m pip install "changepoint-doctor[plot]==0.0.2"
-python -m pip install "changepoint-doctor[notebooks]==0.0.2"
-python -m pip install "changepoint-doctor[parity]==0.0.2"
-python -m pip install "changepoint-doctor[dev]==0.0.2"
+python -m pip install "changepoint-doctor[plot]==0.0.3"
+python -m pip install "changepoint-doctor[notebooks]==0.0.3"
+python -m pip install "changepoint-doctor[parity]==0.0.3"
+python -m pip install "changepoint-doctor[dev]==0.0.3"
 ```
 
 See [`../docs/parity_bocpd_bayesian.md`](../docs/parity_bocpd_bayesian.md) for

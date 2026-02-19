@@ -4,7 +4,7 @@
 
 ```bash
 python -m pip install --upgrade pip
-python -m pip install changepoint-doctor==0.0.2
+python -m pip install changepoint-doctor==0.0.3
 python -c "import cpd; print(cpd.__version__)"
 ```
 
@@ -126,7 +126,7 @@ for result in outputs:
 try:
     fig = restored_outputs[0].plot(x, title="Quickstart breakpoint view")
 except ImportError:
-    # Plotting is optional; install with `python -m pip install "changepoint-doctor[plot]==0.0.2"`.
+    # Plotting is optional; install with `python -m pip install "changepoint-doctor[plot]==0.0.3"`.
     fig = None
 ```
 
@@ -155,7 +155,7 @@ Example scripts are exercised in CI/smoke coverage via
 
 ```bash
 cd cpd/python
-python -m pip install --upgrade "changepoint-doctor[notebooks]==0.0.2"
+python -m pip install --upgrade "changepoint-doctor[notebooks]==0.0.3"
 jupyter lab
 ```
 

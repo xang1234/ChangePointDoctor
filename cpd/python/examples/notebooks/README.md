@@ -25,7 +25,7 @@ Run these commands from repository root:
 ```bash
 cd cpd/python
 python -m pip install --upgrade pip
-python -m pip install --upgrade "changepoint-doctor[notebooks]==0.0.2"
+python -m pip install --upgrade "changepoint-doctor[notebooks]==0.0.3"
 jupyter lab
 ```
 
